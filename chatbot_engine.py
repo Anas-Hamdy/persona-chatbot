@@ -130,6 +130,23 @@ class ChatEngine:
         self._backend_name, self._backend = self._select_backend()
 
     def _select_backend(self):
+        # On Cloudflare Workers (Pyodide), only async HTTP clients are
+        # confirmed supported (see docs/CLOUDFLARE_DEPLOYMENT.md); the
+        # openai/anthropic SDKs make synchronous HTTP calls, which have not
+        # been verified to work in that runtime. Require an explicit opt-in
+        # there so a misconfigured deploy fails loudly (falls back to the
+        # offline generator) rather than silently, unpredictably breaking.
+        on_workers = os.getenv("STORAGE_BACKEND") == "kv"
+        allow_llm = not on_workers or os.getenv("ALLOW_LLM_ON_WORKERS") == "1"
+        if not allow_llm:
+            logger.warning(
+                "Running under the Cloudflare Workers backend: skipping the "
+                "OpenAI/Anthropic SDKs (unverified sync-HTTP support on this "
+                "runtime) and using the offline template generator. Set "
+                "ALLOW_LLM_ON_WORKERS=1 to try anyway."
+            )
+            return "offline-template", _OfflineGenerator()
+
         if os.getenv("OPENAI_API_KEY"):
             try:
                 return "openai", _OpenAIGenerator()

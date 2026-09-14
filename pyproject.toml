@@ -1,0 +1,19 @@
+[project]
+name = "persona-chatbot-worker"
+version = "0.1.0"
+requires-python = ">=3.12"
+# Cloudflare Python Workers run on Pyodide, which only supports pure-Python
+# and PyEmscripten-wheel packages (see docs/CLOUDFLARE_DEPLOYMENT.md). This
+# list is deliberately smaller than requirements.txt: no nltk (its
+# vader_lexicon download needs a writable persistent disk, which Workers
+# doesn't have - profiler.py's built-in lexicon fallback is used instead),
+# no scikit-learn/numpy (only used by evaluate.py, which never runs on
+# Workers), and no gunicorn (Workers is not a WSGI-server-managed process).
+dependencies = [
+    "flask==3.0.3",
+]
+
+[dependency-groups]
+dev = [
+    "workers-py",
+]

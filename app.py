@@ -59,13 +59,27 @@ app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = os.getenv("FLASK_ENV") == "production"
 
-profiler = ImplicitProfiler(storage_dir=os.getenv("PROFILE_STORAGE_DIR", "profiles"))
+# STORAGE_BACKEND selects where per-user profiles are persisted:
+#   "file" (default) - JSON files on local disk, used by `python app.py`
+#                       and the gunicorn/Procfile deployment.
+#   "kv"              - Cloudflare KV, used by the Workers deployment
+#                       (set via wrangler.jsonc vars; see cf/kv_store.py and
+#                       docs/CLOUDFLARE_DEPLOYMENT.md - Workers has no
+#                       persistent local filesystem, so "file" cannot work there).
+if os.getenv("STORAGE_BACKEND", "file") == "kv":
+    from cf.kv_store import KVProfileStore
+    profiler = ImplicitProfiler(store=KVProfileStore(os.getenv("KV_BINDING_NAME", "PROFILES_KV")))
+else:
+    profiler = ImplicitProfiler(storage_dir=os.getenv("PROFILE_STORAGE_DIR", "profiles"))
 engine = ChatEngine()
 
 # In-memory per-user chat history. This is intentionally simple for a
-# single-process demo, but it has two production-relevant limits documented
-# in docs/DEPLOYMENT_CHECKLIST.md: it is lost on restart, and it is NOT shared
-# across multiple gunicorn/uwsgi worker processes (each has its own copy).
+# single-process demo, but it has real limits documented in
+# docs/DEPLOYMENT_CHECKLIST.md: it is lost on restart, it is NOT shared
+# across multiple gunicorn/uwsgi worker processes, and on Cloudflare Workers
+# (STORAGE_BACKEND=kv) it only survives for as long as the same isolate
+# happens to be reused between requests - it is not backed by KV, so do not
+# rely on multi-turn LLM context surviving reliably in that deployment.
 _HISTORY: dict[str, list[dict]] = {}
 _HISTORY_LAST_SEEN: dict[str, float] = {}
 _MAX_HISTORY_TURNS = 40   # 20 user+assistant pairs; bounds per-user memory growth
@@ -144,9 +158,7 @@ def reset():
     user_id = _get_user_id()
     _HISTORY.pop(user_id, None)
     _HISTORY_LAST_SEEN.pop(user_id, None)
-    path = profiler._path(user_id)
-    if path.exists():
-        path.unlink()
+    profiler.delete(user_id)
     return jsonify({"status": "ok"})
 
 

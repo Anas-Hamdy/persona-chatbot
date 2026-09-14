@@ -1,3 +1,6 @@
+# For local development and the gunicorn/Procfile deployment only. The
+# Cloudflare Workers deployment uses pyproject.toml instead (a much smaller,
+# Pyodide-compatible dependency list) - see docs/CLOUDFLARE_DEPLOYMENT.md.
 flask==3.0.3
 gunicorn==22.0.0
 scikit-learn==1.5.1

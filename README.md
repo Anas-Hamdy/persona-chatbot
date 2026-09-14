@@ -143,13 +143,20 @@ different requests from the same user can hit different workers with
 different state. See `docs/DEPLOYMENT_CHECKLIST.md` for the full list of
 what's handled and what isn't yet.
 
+### Cloudflare Workers
+
+A separate deployment target using Wrangler + Cloudflare KV instead of
+gunicorn + local disk. See `docs/CLOUDFLARE_DEPLOYMENT.md` for what changes
+architecturally (storage backend, sentiment fallback, LLM backend caveats)
+and the exact `wrangler`/`pywrangler` commands.
+
 ## Project structure
 
 ```
 persona-chatbot/
 ├── app.py                      # Flask app: routes, session handling, config
 ├── chatbot_engine.py           # Reply generation (LLM-conditioned or offline template)
-├── profiler.py                 # Implicit profile extraction and update logic
+├── profiler.py                 # Implicit profile extraction, update logic, storage interface
 ├── evaluate.py                 # Offline evaluation harness (persona-consistency, Distinct-n)
 ├── data/
 │   └── personachat_sample.json # Small PersonaChat-style sample used by evaluate.py
@@ -159,20 +166,28 @@ persona-chatbot/
 ├── tests/
 │   └── test_app.py             # API smoke tests (pytest)
 ├── docs/
-│   └── DEPLOYMENT_CHECKLIST.md # Detailed production-readiness review
+│   ├── DEPLOYMENT_CHECKLIST.md      # Detailed production-readiness review
+│   └── CLOUDFLARE_DEPLOYMENT.md     # Wrangler/Workers deployment notes
+├── cf/
+│   └── kv_store.py             # Cloudflare KV-backed profile storage (Workers only)
+├── src/
+│   └── worker.py               # Cloudflare Workers entrypoint (wraps app.py)
 ├── .github/workflows/ci.yml    # Runs the test suite on every push/PR
-├── requirements.txt            # Runtime dependencies (pinned)
+├── requirements.txt            # Runtime dependencies for local dev / gunicorn (pinned)
 ├── requirements-dev.txt        # + pytest, for local development/CI
+├── pyproject.toml              # Pyodide-compatible dependencies for Cloudflare Workers
+├── wrangler.jsonc              # Cloudflare Worker configuration
 ├── Procfile                    # Heroku-style start command
-├── .env.example                # Documents every environment variable read
+├── .env.example                # Documents every environment variable read (gunicorn deploy)
+├── .dev.vars.example           # Local secrets template for `pywrangler dev`
 ├── .gitignore
 ├── LICENSE
 └── README.md
 ```
 
 `profiles/` and `eval_profiles/` are created automatically at runtime to
-store per-user profile JSON files; they're git-ignored and not part of the
-repository.
+store per-user profile JSON files (local-disk deployments only); they're
+git-ignored and not part of the repository.
 
 ## Limitations & roadmap
 

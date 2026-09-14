@@ -1,0 +1,9 @@
+# Local-only secrets for `pywrangler dev`. Copy to `.dev.vars` (git-ignored)
+# and fill in - never commit the real file. In production these are set
+# with `wrangler secret put <NAME>` instead (see the deployment commands).
+
+SECRET_KEY=
+# Optional - only if you set ALLOW_LLM_ON_WORKERS=1 in wrangler.jsonc vars
+# and want to test a real LLM backend locally against Workers.
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=

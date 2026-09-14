@@ -125,12 +125,60 @@ class ImplicitProfile:
         )
 
 
-class ImplicitProfiler:
-    """Stateful profiler: call `update()` once per user message."""
+class ProfileStore:
+    """Storage backend interface. `FileProfileStore` (below) is the default,
+    local-disk implementation used by `python app.py` / gunicorn deployments.
+    `KVProfileStore` (cloudflare/kv_store.py) implements the same interface
+    on top of Cloudflare KV for the Workers deployment, where there is no
+    persistent local filesystem. `ImplicitProfiler` only ever calls these
+    two methods, so any other backend (Redis, a real database, ...) is a
+    drop-in as long as it implements them the same way.
+    """
+
+    def load_raw(self, user_id: str) -> dict | None:
+        raise NotImplementedError
+
+    def save_raw(self, user_id: str, data: dict) -> None:
+        raise NotImplementedError
+
+    def delete(self, user_id: str) -> None:
+        raise NotImplementedError
+
+
+class FileProfileStore(ProfileStore):
+    """Default backend: one JSON file per user under `storage_dir`. Requires
+    a writable, persistent local filesystem - fine for `python app.py` or a
+    single-process gunicorn deployment, not usable on Cloudflare Workers."""
 
     def __init__(self, storage_dir: str | Path = "profiles"):
         self.storage_dir = Path(storage_dir)
         self.storage_dir.mkdir(parents=True, exist_ok=True)
+
+    def _path(self, user_id: str) -> Path:
+        return self.storage_dir / f"{user_id}.json"
+
+    def load_raw(self, user_id: str) -> dict | None:
+        path = self._path(user_id)
+        if path.exists():
+            return json.loads(path.read_text())
+        return None
+
+    def save_raw(self, user_id: str, data: dict) -> None:
+        self._path(user_id).write_text(json.dumps(data, indent=2))
+
+    def delete(self, user_id: str) -> None:
+        path = self._path(user_id)
+        if path.exists():
+            path.unlink()
+
+
+class ImplicitProfiler:
+    """Stateful profiler: call `update()` once per user message."""
+
+    def __init__(self, storage_dir: str | Path = "profiles", store: ProfileStore | None = None):
+        # `store` takes priority; `storage_dir` is kept for backward
+        # compatibility with existing call sites (`ImplicitProfiler(storage_dir=...)`).
+        self.store = store if store is not None else FileProfileStore(storage_dir)
         if _VADER_AVAILABLE:
             self._sentiment = SentimentIntensityAnalyzer()
         else:
@@ -139,18 +187,24 @@ class ImplicitProfiler:
     # ------------------------------------------------------------------ #
     # persistence
     # ------------------------------------------------------------------ #
-    def _path(self, user_id: str) -> Path:
-        return self.storage_dir / f"{user_id}.json"
+    def _path(self, user_id: str):
+        """Kept for backward compatibility with code (and tests) written
+        against the old file-only API; only meaningful for FileProfileStore."""
+        if isinstance(self.store, FileProfileStore):
+            return self.store._path(user_id)
+        raise AttributeError("_path() is only available with FileProfileStore")
 
     def load(self, user_id: str) -> ImplicitProfile:
-        path = self._path(user_id)
-        if path.exists():
-            data = json.loads(path.read_text())
+        data = self.store.load_raw(user_id)
+        if data:
             return ImplicitProfile(**data)
         return ImplicitProfile(user_id=user_id)
 
     def save(self, profile: ImplicitProfile) -> None:
-        self._path(profile.user_id).write_text(json.dumps(profile.to_dict(), indent=2))
+        self.store.save_raw(profile.user_id, profile.to_dict())
+
+    def delete(self, user_id: str) -> None:
+        self.store.delete(user_id)
 
     # ------------------------------------------------------------------ #
     # feature extraction

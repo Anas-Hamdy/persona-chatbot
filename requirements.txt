@@ -1,0 +1,12 @@
+flask==3.0.3
+gunicorn==22.0.0
+scikit-learn==1.5.1
+nltk==3.9.1
+numpy==1.26.4
+
+# Optional - only needed if you set OPENAI_API_KEY / ANTHROPIC_API_KEY.
+# Left uncommented so `pip install -r requirements.txt` gives a fully
+# working install out of the box; remove either line if you never plan
+# to use that provider and want a smaller install.
+openai==1.51.0
+anthropic==0.34.2

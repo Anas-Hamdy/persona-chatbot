@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Personalized Chatbot Prototype</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <div class="chat-col">
+      <h1>Personalized Chatbot</h1>
+      <p class="sub">backend: <code id="backend">{{ backend }}</code> · user: <code>{{ user_id }}</code></p>
+      <div id="messages" class="messages"></div>
+      <form id="chat-form">
+        <input id="msg" autocomplete="off" placeholder="Type a message..." />
+        <button type="submit">Send</button>
+      </form>
+      <button id="reset-btn" class="reset">Reset profile</button>
+    </div>
+    <div class="profile-col">
+      <h2>Inferred profile (live)</h2>
+      <pre id="profile-box">no messages yet</pre>
+    </div>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

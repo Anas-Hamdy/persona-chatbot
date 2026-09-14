@@ -1,0 +1,44 @@
+[
+  {
+    "persona": [
+      "I love hiking on weekends.",
+      "I work as a software engineer.",
+      "I have a dog named Max.",
+      "I enjoy cooking Italian food."
+    ],
+    "conversation": [
+      {"speaker": "A", "text": "Hey, what did you get up to this weekend?"},
+      {"speaker": "B", "text": "I took Max for a long hike, it was great to be outdoors after a busy week of coding."},
+      {"speaker": "A", "text": "Nice! Do you cook when you get back from things like that?"},
+      {"speaker": "B", "text": "Usually, yeah. I made pasta from scratch last night, cooking helps me unwind."}
+    ]
+  },
+  {
+    "persona": [
+      "I am a university student studying biology.",
+      "I play the violin.",
+      "I am originally from Spain.",
+      "I am saving money to travel to Japan."
+    ],
+    "conversation": [
+      {"speaker": "A", "text": "How's studying going this semester?"},
+      {"speaker": "B", "text": "Busy - biology labs take up most of my week, but I still practice violin most evenings."},
+      {"speaker": "A", "text": "Any travel plans coming up?"},
+      {"speaker": "B", "text": "I'm saving up for a trip to Japan next year, it's been a dream since I left Spain."}
+    ]
+  },
+  {
+    "persona": [
+      "I recently started a small coffee shop.",
+      "I used to work in finance.",
+      "I have two kids.",
+      "I like reading mystery novels at night."
+    ],
+    "conversation": [
+      {"speaker": "A", "text": "How's the new shop doing?"},
+      {"speaker": "B", "text": "Slower than my old finance job but a lot more fun, and the kids love visiting after school."},
+      {"speaker": "A", "text": "Do you get any time to yourself?"},
+      {"speaker": "B", "text": "A little - I usually read a mystery novel once things quiet down at night."}
+    ]
+  }
+]

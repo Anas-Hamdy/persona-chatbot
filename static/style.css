@@ -1,0 +1,16 @@
+:root { color-scheme: light dark; }
+body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: #f5f6f8; }
+.wrap { display: flex; height: 100vh; }
+.chat-col { flex: 2; display: flex; flex-direction: column; padding: 20px; box-sizing: border-box; }
+.profile-col { flex: 1; background: #10151f; color: #d7e2f2; padding: 20px; box-sizing: border-box; overflow-y: auto; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.sub { color: #666; font-size: 13px; margin-top: 0; }
+.messages { flex: 1; overflow-y: auto; border: 1px solid #ddd; border-radius: 8px; padding: 12px; background: #fff; margin-bottom: 10px; }
+.msg { margin: 6px 0; padding: 8px 12px; border-radius: 10px; max-width: 75%; line-height: 1.4; }
+.msg.user { background: #dbeafe; margin-left: auto; }
+.msg.bot { background: #eee; margin-right: auto; }
+#chat-form { display: flex; gap: 8px; }
+#msg { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #ccc; }
+button { padding: 10px 16px; border-radius: 8px; border: none; background: #2563eb; color: #fff; cursor: pointer; }
+.reset { background: transparent; color: #b91c1c; border: 1px solid #b91c1c; margin-top: 10px; align-self: flex-start; }
+#profile-box { white-space: pre-wrap; font-size: 13px; background: #0b0f17; padding: 12px; border-radius: 8px; }

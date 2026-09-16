@@ -78,7 +78,7 @@ Requires Python 3.11+.
 git clone https://github.com/YOUR_USERNAME/persona-chatbot.git
 cd persona-chatbot
 python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r local/requirements.txt
 python -c "import nltk; nltk.download('vader_lexicon')"   # one-time, improves sentiment accuracy
 cp .env.example .env    # optional locally; edit if you want a stable SECRET_KEY or an LLM key
 python app.py
@@ -119,7 +119,7 @@ server-side, never exposed to the client).
 ## Running tests
 
 ```bash
-pip install -r requirements-dev.txt
+pip install -r local/requirements-dev.txt
 pytest -v
 ```
 
@@ -173,8 +173,12 @@ persona-chatbot/
 ├── src/
 │   └── worker.py               # Cloudflare Workers entrypoint (wraps app.py)
 ├── .github/workflows/ci.yml    # Runs the test suite on every push/PR
-├── requirements.txt            # Runtime dependencies for local dev / gunicorn (pinned)
-├── requirements-dev.txt        # + pytest, for local development/CI
+├── local/
+│   ├── requirements.txt        # Runtime dependencies for local dev / gunicorn (pinned)
+│   └── requirements-dev.txt    # + pytest, for local development/CI
+│                                # (kept out of the repo root so Cloudflare Workers Builds
+│                                #  doesn't pick this up instead of pyproject.toml - see
+│                                #  docs/CLOUDFLARE_DEPLOYMENT.md)
 ├── pyproject.toml              # Pyodide-compatible dependencies for Cloudflare Workers
 ├── wrangler.jsonc              # Cloudflare Worker configuration
 ├── Procfile                    # Heroku-style start command

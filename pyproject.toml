@@ -4,11 +4,23 @@ version = "0.1.0"
 requires-python = ">=3.12"
 # Cloudflare Python Workers run on Pyodide, which only supports pure-Python
 # and PyEmscripten-wheel packages (see docs/CLOUDFLARE_DEPLOYMENT.md). This
-# list is deliberately smaller than requirements.txt: no nltk (its
+# list is deliberately smaller than local/requirements.txt: no nltk (its
 # vader_lexicon download needs a writable persistent disk, which Workers
 # doesn't have - profiler.py's built-in lexicon fallback is used instead),
 # no scikit-learn/numpy (only used by evaluate.py, which never runs on
 # Workers), and no gunicorn (Workers is not a WSGI-server-managed process).
+#
+# This file MUST be the only Python dependency manifest visible at the repo
+# root - local/requirements.txt (the gunicorn/local-dev deployment's deps,
+# including scikit-learn/nltk/gunicorn) is kept in a subfolder on purpose.
+# An earlier layout had requirements.txt at the repo root alongside this
+# file, and Cloudflare Workers Builds' own build step picked up and ran
+# `pip install -r requirements.txt` instead of using this file - which tried
+# to build scikit-learn from source in the Pyodide build environment and
+# hung for 10+ minutes before failing. Confirmed via Cloudflare's own
+# python-workers-examples repo (github.com/cloudflare/python-workers-examples,
+# e.g. the flask-todo example): every example keeps only pyproject.toml at
+# the Worker's root, never a sibling requirements.txt.
 dependencies = [
     "flask==3.0.3",
     "asgiref==3.8.1",

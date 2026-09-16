@@ -15,6 +15,23 @@ addressed yet: `os.getenv()` at Python module import time cannot see
 Cloudflare's `vars`/`secrets` at all, because on Workers this module runs
 once at cold start, before any request (and therefore any `env`) exists.
 
+A fourth, separate bug showed up only once a real Cloudflare Workers Builds
+deployment was attempted (Git-integration auto-deploy, not `wrangler
+deploy` from a CLI): the build log showed Cloudflare running
+`pip install -r requirements.txt` and then hanging for 10+ minutes trying
+to build `scikit-learn` from source, before failing outright. The repo root
+had both `requirements.txt` (gunicorn/local-dev deps: scikit-learn, nltk,
+gunicorn - none of it Pyodide-installable) and `pyproject.toml` (the actual
+Pyodide-compatible deps for this Worker), and Workers Builds' own build step
+picked up `requirements.txt` instead. Confirmed against
+[Cloudflare's Python packages docs](https://developers.cloudflare.com/workers/languages/python/packages/)
+(Python Workers are managed via `pyproject.toml`) and Cloudflare's own
+[python-workers-examples](https://github.com/cloudflare/python-workers-examples)
+repo, where every example (including `flask-todo`) keeps only
+`pyproject.toml` at the Worker's root - never a sibling `requirements.txt`.
+Fixed by moving `requirements.txt`/`requirements-dev.txt` into `local/`, so
+`pyproject.toml` is the only Python dependency manifest at the repo root.
+
 ## Architecture change from the gunicorn deployment
 
 Cloudflare Workers are stateless, request-scoped V8 isolates with Python

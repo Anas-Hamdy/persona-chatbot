@@ -1,38 +1,37 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "persona-chatbot",
-  "main": "src/worker.py",
-  "compatibility_date": "2026-09-14",
-  "compatibility_flags": ["python_workers"],
-
-  // Serves templates/ and static/ (the chat UI) alongside the Flask API.
-  // run_worker_first ensures /api/* and /healthz hit the Python Worker
-  // instead of being served (or 404ing) as static files.
-  "assets": {
-    "directory": "./static",
-    "binding": "ASSETS",
-    "run_worker_first": true
-  },
-
-  // Non-secret configuration. STORAGE_BACKEND=kv switches profiler.py to
-  // cf/kv_store.py instead of local-disk JSON files (see profiler.py).
-  "vars": {
-    "STORAGE_BACKEND": "kv",
-    "FLASK_ENV": "production",
-    "KV_BINDING_NAME": "PROFILES_KV"
-  },
-
-  // Created with `wrangler kv namespace create PROFILES_KV` - paste the
-  // returned id below before deploying (see the deployment commands).
-  "kv_namespaces": [
-    {
-      "binding": "PROFILES_KV",
-      "id": "REPLACE_WITH_KV_NAMESPACE_ID"
-    }
-  ]
-
-  // SECRET_KEY, and optionally OPENAI_API_KEY / ANTHROPIC_API_KEY, are
-  // deliberately NOT listed here - they're set with `wrangler secret put`
-  // (production) or in .dev.vars (local dev only, git-ignored), never
-  // committed in this file.
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "persona-chatbot",
+	"main": "src/worker.py",
+	"compatibility_date": "2026-09-14",
+	"compatibility_flags": [
+		"python_workers"
+	],
+	// Serves templates/ and static/ (the chat UI) alongside the Flask API.
+	// run_worker_first ensures /api/* and /healthz hit the Python Worker
+	// instead of being served (or 404ing) as static files.
+	"assets": {
+		"directory": "./static",
+		"binding": "ASSETS",
+		"run_worker_first": true
+	},
+	// Non-secret configuration. STORAGE_BACKEND=kv switches profiler.py to
+	// cf/kv_store.py instead of local-disk JSON files (see profiler.py).
+	"vars": {
+		"STORAGE_BACKEND": "kv",
+		"FLASK_ENV": "production",
+		"KV_BINDING_NAME": "PROFILES_KV"
+	},
+	// Created with `wrangler kv namespace create PROFILES_KV` - paste the
+	// returned id below before deploying (see the deployment commands).
+	"kv_namespaces": [
+		{
+			"binding": "PROFILES_KV",
+			"id": "288ab8c8ad0043709bc11d81462eed5e",
+			"remote": true
+		}
+	]
+	// SECRET_KEY, and optionally OPENAI_API_KEY / ANTHROPIC_API_KEY, are
+	// deliberately NOT listed here - they're set with `wrangler secret put`
+	// (production) or in .dev.vars (local dev only, git-ignored), never
+	// committed in this file.
 }

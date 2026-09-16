@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "persona-chatbot-worker"
 version = "0.1.0"
@@ -27,6 +31,32 @@ dependencies = [
 ]
 
 [dependency-groups]
+# Matches Cloudflare's own documented pyproject.toml for Flask on Python
+# Workers (developers.cloudflare.com/workers/languages/python/packages/flask/):
+# both workers-py (provides the `pywrangler` CLI) and workers-runtime-sdk
+# (the package actually providing `from workers import ...` at dev/build
+# time) belong in the dev group, not [project].dependencies - an earlier
+# attempt to "fix" a ModuleNotFoundError by moving workers-py into
+# [project].dependencies was based on a wrong guess, not this doc.
 dev = [
-    "workers-py",
+    "workers-py>=1.9",
+    "workers-runtime-sdk>=1.8.2",
 ]
+
+[tool.setuptools]
+# Cloudflare's own docs: "Wrangler uploads your Python code and any packages
+# included in your pyproject.toml" - meaning only files that are actually
+# part of THIS built package get uploaded to the Worker. Without this
+# section, pip built an empty wheel (confirmed via an earlier deploy log
+# that only showed empty *.egg-info metadata under "Attaching additional
+# modules", never our real source), so `import cf.kv_store` (and app.py/
+# chatbot_engine.py/profiler.py, imported by src/worker.py and app.py)
+# failed at deploy time with ModuleNotFoundError. This explicitly declares
+# every local module/package src/worker.py's import chain actually needs.
+py-modules = ["app", "chatbot_engine", "profiler"]
+packages = ["cf"]
+# NOTE: this does not yet package templates/index.html (used by app.py's
+# render_template call) - that is a flat top-level directory, not part of
+# any Python package, so [tool.setuptools.package-data] doesn't apply to it
+# cleanly. Left for the next deploy attempt to reveal whether it's actually
+# needed at runtime before guessing at a fix for it.

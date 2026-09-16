@@ -14,6 +14,9 @@ eval_profiles/
 .wrangler/
 node_modules/
 wrangler.toml.bak
+python_modules/
+pylock.toml
+.venv-workers/
 
 # --- Python ---
 __pycache__/

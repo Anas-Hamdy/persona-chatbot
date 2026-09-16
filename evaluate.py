@@ -32,6 +32,8 @@ from typing import List
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))  # chatbot_engine.py/profiler.py live there now
 from chatbot_engine import ChatEngine
 from profiler import ImplicitProfiler
 

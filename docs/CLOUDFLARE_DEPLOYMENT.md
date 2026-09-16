@@ -32,6 +32,45 @@ repo, where every example (including `flask-todo`) keeps only
 Fixed by moving `requirements.txt`/`requirements-dev.txt` into `local/`, so
 `pyproject.toml` is the only Python dependency manifest at the repo root.
 
+## Second revision note (after a real deploy attempt)
+
+Getting an actual `pywrangler deploy` to succeed surfaced two more real,
+confirmed bugs beyond the KV/env ones above, neither of which could have
+been caught without attempting a live deploy:
+
+1. **`npx wrangler deploy` vs `uv run pywrangler deploy`.** Plain `wrangler`
+   built this project's `pyproject.toml` into a wheel and deployed it, but
+   consistently failed with `ModuleNotFoundError: No module named 'workers'`
+   - a real, still-open Cloudflare bug
+   ([cloudflare/workers-sdk#15208](https://github.com/cloudflare/workers-sdk/issues/15208))
+   that a Cloudflare Workers Paid plan upgrade did NOT fix for this account.
+   Switching to `uv run pywrangler deploy` (after `uv sync` installs
+   `workers-py` and `workers-runtime-sdk` from the `dev` dependency group,
+   matching Cloudflare's own documented `pyproject.toml` for Flask:
+   [developers.cloudflare.com/workers/languages/python/packages/flask/](https://developers.cloudflare.com/workers/languages/python/packages/flask/))
+   resolved this completely - `pywrangler` vendors the actual Python Workers
+   runtime SDK into the deployed bundle; plain `wrangler` does not.
+   `disable_python_external_sdk` (the other workaround mentioned in that
+   GitHub issue) was tried and rejected: it removes `wsgi` from the
+   `workers` package entirely, which this Flask-based app depends on.
+2. **First-party module layout.** `app.py`/`chatbot_engine.py`/`profiler.py`/
+   `cf/` used to live at the repo root with a `sys.path.insert()` hack in
+   `src/worker.py` to reach them - this worked for local Python (which
+   doesn't care where a file physically sits, only what's on `sys.path`),
+   but Cloudflare's Python Workers bundler does not do a repo-wide import
+   scan; per
+   [developers.cloudflare.com/workers/languages/python/basics/](https://developers.cloudflare.com/workers/languages/python/basics/),
+   it only auto-discovers local modules that sit in the **same directory as
+   the main entrypoint**. This produced a real
+   `ModuleNotFoundError: No module named 'cf'` at deploy time (right after
+   the `workers` SDK bug above was fixed, so it was only reachable once that
+   first bug was out of the way). Fixed by moving all of them into `src/`
+   alongside `worker.py`, and updating the gunicorn/local dev path
+   (`Procfile`'s `--chdir src`, `app.py`'s `static_folder="../static"`,
+   `README.md`'s quickstart, `tests/test_app.py`'s `sys.path` line,
+   `evaluate.py`'s import shim) so both deployment targets keep working from
+   one shared source tree instead of duplicating these files.
+
 ## Architecture change from the gunicorn deployment
 
 Cloudflare Workers are stateless, request-scoped V8 isolates with Python

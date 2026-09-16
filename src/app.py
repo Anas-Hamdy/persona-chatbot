@@ -29,7 +29,12 @@ from cf.kv_store import KVProfileStore  # safe to import unconditionally - no Wo
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("persona_chatbot")
 
-app = Flask(__name__)
+# static/ stays at the repo root (unchanged, since wrangler.jsonc's
+# assets.directory="./static" and Workers Builds still expect it there) -
+# app.py moved into src/ (see src/worker.py's comment for why), so Flask's
+# default static_folder ("static" next to this file) would otherwise look
+# for a nonexistent src/static/ during local/gunicorn runs.
+app = Flask(__name__, static_folder="../static", static_url_path="/static")
 
 # Cloudflare Workers (Pyodide) likely do NOT populate os.environ from
 # wrangler.jsonc's `vars`/`secrets` - those are only confirmed to be

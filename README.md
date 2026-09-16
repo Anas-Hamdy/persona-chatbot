@@ -81,7 +81,7 @@ python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activa
 pip install -r local/requirements.txt
 python -c "import nltk; nltk.download('vader_lexicon')"   # one-time, improves sentiment accuracy
 cp .env.example .env    # optional locally; edit if you want a stable SECRET_KEY or an LLM key
-python app.py
+python src/app.py
 ```
 
 Open **http://localhost:5000**. No API key is required — without one, the
@@ -154,24 +154,29 @@ and the exact `wrangler`/`pywrangler` commands.
 
 ```
 persona-chatbot/
-├── app.py                      # Flask app: routes, session handling, config
-├── chatbot_engine.py           # Reply generation (LLM-conditioned or offline template)
-├── profiler.py                 # Implicit profile extraction, update logic, storage interface
-├── evaluate.py                 # Offline evaluation harness (persona-consistency, Distinct-n)
+├── src/                         # First-party app code, shared by BOTH deployments -
+│   │                            # Cloudflare's Python Workers bundler only auto-discovers
+│   │                            # local modules that sit next to the entrypoint (worker.py),
+│   │                            # so this is the single source of truth, not just a
+│   │                            # Cloudflare-specific folder (see docs/CLOUDFLARE_DEPLOYMENT.md).
+│   ├── app.py                   # Flask app: routes, session handling, config
+│   ├── chatbot_engine.py        # Reply generation (LLM-conditioned or offline template)
+│   ├── profiler.py              # Implicit profile extraction, update logic, storage interface
+│   ├── cf/
+│   │   └── kv_store.py          # Cloudflare KV-backed profile storage (Workers only)
+│   ├── templates/
+│   │   └── index.html           # Chat UI with a live profile panel
+│   └── worker.py                # Cloudflare Workers entrypoint (wraps app.py)
+├── evaluate.py                  # Offline evaluation harness (persona-consistency, Distinct-n)
 ├── data/
 │   └── personachat_sample.json # Small PersonaChat-style sample used by evaluate.py
-├── static/                     # Chat UI assets (JS, CSS)
-├── templates/
-│   └── index.html              # Chat UI with a live profile panel
+├── static/                     # Chat UI assets (JS, CSS) - stays at repo root: referenced by
+│                                # wrangler.jsonc's assets.directory AND app.py's static_folder
 ├── tests/
 │   └── test_app.py             # API smoke tests (pytest)
 ├── docs/
 │   ├── DEPLOYMENT_CHECKLIST.md      # Detailed production-readiness review
 │   └── CLOUDFLARE_DEPLOYMENT.md     # Wrangler/Workers deployment notes
-├── cf/
-│   └── kv_store.py             # Cloudflare KV-backed profile storage (Workers only)
-├── src/
-│   └── worker.py               # Cloudflare Workers entrypoint (wraps app.py)
 ├── .github/workflows/ci.yml    # Runs the test suite on every push/PR
 ├── local/
 │   ├── requirements.txt        # Runtime dependencies for local dev / gunicorn (pinned)

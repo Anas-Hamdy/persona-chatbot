@@ -16,14 +16,18 @@ https://developers.cloudflare.com/workers/languages/python/packages/flask/
 for the current documented pattern.
 """
 
-import sys
-from pathlib import Path
-
-# The Flask app and its dependencies (app.py, chatbot_engine.py, profiler.py,
-# cf/) live at the repository root, one level up from src/.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 from workers import WorkerEntrypoint, wsgi  # provided by the Workers Python runtime
+
+# app.py, chatbot_engine.py, profiler.py and cf/ all live right next to this
+# file in src/ - Cloudflare's Python Workers bundler only auto-discovers
+# first-party local modules that sit alongside the main entrypoint (see
+# developers.cloudflare.com/workers/languages/python/basics/), not modules
+# elsewhere in the repo. An earlier layout kept them at the repo root with a
+# sys.path.insert() hack to make local/gunicorn imports work; that worked
+# for local Python but not for what Cloudflare's own bundler scans, and
+# produced a real "ModuleNotFoundError: No module named \'cf\'" at deploy
+# time. This directory layout is now the single source of truth for both
+# the gunicorn deployment (see Procfile's --chdir src) and this Worker.
 
 import cf.kv_store as kv_store
 from app import app as flask_app  # noqa: E402  (import after sys.path fix)

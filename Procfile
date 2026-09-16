@@ -3,4 +3,4 @@
 # means different requests from the same user can hit different workers
 # with different history/profile state. Raise --workers only after moving
 # history and profile storage to a shared store (Redis/DB).
-web: gunicorn "app:app" --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 60
+web: gunicorn --chdir src "app:app" --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 60

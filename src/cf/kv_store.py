@@ -74,3 +74,30 @@ class KVProfileStore(ProfileStore):
 
     async def delete(self, user_id: str) -> None:
         await self._kv().delete(f"profile:{user_id}")
+
+    async def list_user_ids(self) -> list[str]:
+        """Paginates through env.PROFILES_KV.list() (confirmed signature
+        and response shape against developers.cloudflare.com/kv/api/
+        list-keys/: {"keys": [{"name": ...}, ...], "list_complete": bool,
+        "cursor": str}) and strips the "profile:" prefix each key was
+        stored under. Used only by /admin/stats (app.py) - not on any
+        request-handling hot path."""
+        kv = self._kv()
+        prefix = "profile:"
+        user_ids: list[str] = []
+        cursor = None
+        while True:
+            options = {"prefix": prefix}
+            if cursor:
+                options["cursor"] = cursor
+            result = await kv.list(options)
+            for key in result["keys"]:
+                name = key["name"]
+                if name.startswith(prefix):
+                    user_ids.append(name[len(prefix):])
+            if result["list_complete"]:
+                break
+            cursor = result["cursor"]
+            if not cursor:
+                break
+        return user_ids

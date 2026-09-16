@@ -22,6 +22,8 @@ import time
 
 from flask import Flask, jsonify, render_template, request, session
 
+from collections import Counter
+
 from chatbot_engine import ChatEngine
 from profiler import ImplicitProfiler
 from cf.kv_store import KVProfileStore  # safe to import unconditionally - no Workers-only deps at import time
@@ -312,6 +314,118 @@ def reset():
     _HISTORY_LAST_SEEN.pop(user_id, None)
     _run_async(profiler.delete(user_id))
     return jsonify({"status": "ok"})
+
+
+@app.route("/admin/stats")
+def admin_stats():
+    """Aggregate dashboard across every tester's inferred profile - for
+    inspecting/reporting the thesis's implicit-profiling results, not part
+    of normal chat operation. Deliberately unauthenticated per the current
+    deployment (single-operator research demo, not a public product) - add
+    a shared-secret check here first if this ever needs to be shown to
+    anyone else or left running unattended for a long period.
+    """
+    profiles = _run_async(profiler.list_all())
+    total_users = len(profiles)
+
+    def _bucket(value: float) -> str:
+        if value > 0.2:
+            return "positive"
+        if value < -0.2:
+            return "negative"
+        return "neutral"
+
+    def _formality_bucket(value: float) -> str:
+        if value > 0.2:
+            return "formal"
+        if value < -0.2:
+            return "informal"
+        return "neutral"
+
+    tone_counts = Counter(p.tone_label for p in profiles)
+    sentiment_buckets = Counter(_bucket(p.sentiment_ema) for p in profiles)
+    formality_buckets = Counter(_formality_bucket(p.formality_ema) for p in profiles)
+
+    topic_totals: dict[str, float] = {}
+    for p in profiles:
+        for topic, score in p.interests.items():
+            topic_totals[topic] = topic_totals.get(topic, 0.0) + score
+    topics_sorted = sorted(topic_totals.items(), key=lambda kv: kv[1], reverse=True)
+    max_topic_score = max((score for _, score in topics_sorted), default=0.0)
+    topic_bars = [
+        {
+            "label": topic,
+            "value": score,
+            "pct": (score / max_topic_score * 100) if max_topic_score else 0,
+        }
+        for topic, score in topics_sorted
+    ]
+
+    tone_order = ["enthusiastic", "professional", "casual", "neutral", "frustrated"]
+    max_tone_count = max(tone_counts.values(), default=0)
+    tone_bars = [
+        {
+            "label": tone,
+            "value": tone_counts.get(tone, 0),
+            "pct": (tone_counts.get(tone, 0) / max_tone_count * 100) if max_tone_count else 0,
+        }
+        for tone in tone_order
+        if tone_counts.get(tone, 0) > 0
+    ]
+
+    def _diverging_bars(buckets: Counter, order: list[str]) -> list[dict]:
+        max_count = max(buckets.values(), default=0)
+        return [
+            {
+                "label": label,
+                "value": buckets.get(label, 0),
+                "pct": (buckets.get(label, 0) / max_count * 100) if max_count else 0,
+            }
+            for label in order
+        ]
+
+    sentiment_bars = _diverging_bars(sentiment_buckets, ["negative", "neutral", "positive"])
+    formality_bars = _diverging_bars(formality_buckets, ["informal", "neutral", "formal"])
+
+    avg_sentiment = sum(p.sentiment_ema for p in profiles) / total_users if total_users else 0.0
+    avg_formality = sum(p.formality_ema for p in profiles) / total_users if total_users else 0.0
+    avg_msg_len = sum(p.avg_message_length for p in profiles) / total_users if total_users else 0.0
+    total_turns = sum(p.turn_count for p in profiles)
+    avg_turns = total_turns / total_users if total_users else 0.0
+
+    user_rows = sorted(
+        (
+            {
+                "user_id": p.user_id,
+                "turn_count": p.turn_count,
+                "tone_label": p.tone_label,
+                "sentiment_ema": p.sentiment_ema,
+                "formality_ema": p.formality_ema,
+                "dominant_topics": ", ".join(p.dominant_topics) if p.dominant_topics else "-",
+                "avg_message_length": p.avg_message_length,
+            }
+            for p in profiles
+        ),
+        key=lambda r: r["turn_count"],
+        reverse=True,
+    )
+
+    return render_template(
+        "admin_stats.html",
+        total_users=total_users,
+        total_turns=total_turns,
+        avg_turns=avg_turns,
+        avg_sentiment=avg_sentiment,
+        avg_formality=avg_formality,
+        avg_msg_len=avg_msg_len,
+        backend_name=engine.backend_name,
+        storage_backend="Cloudflare KV" if isinstance(profiler.store, KVProfileStore) else "Local file storage",
+        tone_bars=tone_bars,
+        topic_bars=topic_bars,
+        sentiment_bars=sentiment_bars,
+        formality_bars=formality_bars,
+        user_rows=user_rows,
+    )
 
 
 @app.errorhandler(404)

@@ -147,6 +147,13 @@ class ProfileStore:
     async def delete(self, user_id: str) -> None:
         raise NotImplementedError
 
+    async def list_user_ids(self) -> list[str]:
+        """Return every user_id currently stored. Used by the /admin/stats
+        dashboard (app.py) to aggregate statistics across every tester -
+        not needed for normal chat operation, which always addresses a
+        single known user_id."""
+        raise NotImplementedError
+
 
 class FileProfileStore(ProfileStore):
     """Default backend: one JSON file per user under `storage_dir`. Requires
@@ -179,6 +186,9 @@ class FileProfileStore(ProfileStore):
         path = self._path(user_id)
         if path.exists():
             path.unlink()
+
+    async def list_user_ids(self) -> list[str]:
+        return [p.stem for p in self.storage_dir.glob("*.json")]
 
 
 class ImplicitProfiler:
@@ -214,6 +224,18 @@ class ImplicitProfiler:
 
     async def delete(self, user_id: str) -> None:
         await self.store.delete(user_id)
+
+    async def list_all(self) -> List[ImplicitProfile]:
+        """Load every stored profile - used only by the /admin/stats
+        dashboard (app.py) to compute aggregate statistics across every
+        tester. Not on any hot path (chat/reset), so no caching or
+        pagination is attempted here even though KVProfileStore's
+        list_user_ids() does paginate the underlying KV .list() calls."""
+        user_ids = await self.store.list_user_ids()
+        profiles = []
+        for user_id in user_ids:
+            profiles.append(await self.load(user_id))
+        return profiles
 
     # ------------------------------------------------------------------ #
     # feature extraction

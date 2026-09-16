@@ -131,21 +131,21 @@ def _apply_cloudflare_env_overrides():
     os.getenv() at import time (see the comment above `_on_workers`). This
     runs once, on the first real request, and re-applies SECRET_KEY /
     STORAGE_BACKEND from `env` if one is found. It is a no-op (and cheap -
-    one dict lookup) on every other deployment, where `environ["env"]` is
-    simply never present.
+    one dict lookup) on every other deployment, where `environ["workers.env"]`
+    is simply never present.
 
-    The `request.environ["env"]` lookup itself is the one part of this
-    integration that could not be confirmed against Cloudflare's current
-    docs (see cf/kv_store.py's module docstring and
-    docs/CLOUDFLARE_DEPLOYMENT.md) - if this never fires on a real deploy,
-    that lookup key is the first thing to check.
+    Revision note: this used to read `request.environ["env"]`, an unconfirmed
+    guess. Confirmed correct key against Cloudflare's own documented Flask
+    example (developers.cloudflare.com/workers/languages/python/packages/flask/,
+    which shows `request.environ["workers.env"].ASSETS`) - it's
+    `"workers.env"`, not `"env"`.
     """
     global _cf_env_checked
     if _cf_env_checked:
         return
     _cf_env_checked = True
 
-    env = request.environ.get("env")
+    env = request.environ.get("workers.env")
     if env is None:
         return
 

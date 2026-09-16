@@ -8,16 +8,18 @@ used by `python app.py` / gunicorn) does not work there. This class
 implements the same `ProfileStore` interface on top of a KV namespace
 binding instead.
 
-IMPORTANT - verify before relying on this in production: how the Workers
-Python WSGI bridge (`wsgi.entrypoint`, used in src/worker.py) exposes
-bindings to Flask is a beta API and has changed before. This module first
-tries the documented-by-convention `flask.request.environ["env"]`; if that
-key isn't present, it falls back to whatever `bind(env)` was called with
-most recently (set explicitly from src/worker.py). Check
-https://developers.cloudflare.com/workers/languages/python/ for the current
-mechanism if profile persistence doesn't work as expected after deploying,
-and update `_get_env()` below accordingly - that is the one piece of this
-integration that could not be confirmed against a live deployment.
+Revision note: `env` (bindings, vars) is exposed to Flask through
+`request.environ["workers.env"]` - confirmed against Cloudflare's own
+documented Flask example
+(developers.cloudflare.com/workers/languages/python/packages/flask/, which
+shows `request.environ["workers.env"].ASSETS`). An earlier version of this
+file guessed the key was `"env"` (unconfirmed at the time) and additionally
+carried a `bind()`/`_last_bound_env` fallback for a custom WorkerEntrypoint
+subclass in src/worker.py that manually forwarded `self.env`; that
+subclass turned out to be based on a different wrong guess (see
+src/worker.py's revision note) and has been removed, which makes the
+`bind()` fallback path dead code - removed here too, since
+`request.environ["workers.env"]` is unconditionally correct on Workers.
 """
 
 from __future__ import annotations
@@ -26,26 +28,10 @@ from typing import Any, Optional
 
 from profiler import ProfileStore
 
-_last_bound_env: Optional[Any] = None
-
-
-def bind(env: Any) -> None:
-    """Call this once per request from src/worker.py with the Worker's
-    `env` object, before any Flask route handler runs, as a fallback path
-    for _get_env() below."""
-    global _last_bound_env
-    _last_bound_env = env
-
 
 def _get_env() -> Optional[Any]:
-    try:
-        from flask import request
-        env = request.environ.get("env")
-        if env is not None:
-            return env
-    except Exception:
-        pass
-    return _last_bound_env
+    from flask import request
+    return request.environ.get("workers.env")
 
 
 class KVProfileStore(ProfileStore):

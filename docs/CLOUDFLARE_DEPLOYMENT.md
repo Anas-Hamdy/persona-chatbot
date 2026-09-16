@@ -116,37 +116,44 @@ forced real changes, not just config:
    backends by default under `STORAGE_BACKEND=kv` unless
    `ALLOW_LLM_ON_WORKERS=1` is set.
 
-## Two things that still cannot be confirmed without a live deploy
+## Resolved only by a real live deploy (kept for the record)
 
-Both were verified as far as they can be from outside an actual Cloudflare
-account — with Flask's test client and hand-built fake `env`/KV objects —
-but two specific pieces of plumbing are beta, undocumented internals that
-only a real `pywrangler dev`/`deploy` run can confirm:
+Both of these were originally flagged as unconfirmable from outside a real
+Cloudflare account, and both were in fact wrong in their original form -
+confirmed and fixed only once `wrangler tail` showed a real traceback:
 
-1. **How `env` reaches Flask at all.** `cf/kv_store.py` and the
-   `before_request` hook both read `flask.request.environ.get("env")`,
-   which is the conventional way a WSGI bridge exposes platform objects to
-   a framework that only knows about `environ` — but Cloudflare's docs
-   don't spell out that Python Workers' WSGI server does this. If profile
-   data isn't persisting after a real deploy, print
-   `dict(request.environ)` inside a route to see what keys Cloudflare's
-   bridge actually injects, and adjust `_get_env()` accordingly — that
-   function is intentionally the one place this assumption lives.
-2. **Whether `await`ing a KV Promise works inside Flask's async-view event
-   loop.** Flask runs `async def` views by bridging them through `asgiref`
-   (`async_to_sync`), which can spin up its own asyncio event loop. Pyodide
-   resolves JS Promises through its own event loop (`pyodide.webloop`).
-   Whether those two compose correctly — i.e., whether `await
-   self.env.PROFILES_KV.get(...)` resolves correctly from inside an
-   asgiref-managed loop on this specific runtime — is not documented
-   anywhere found, and is the single highest-risk unknown in this
-   integration. Test a real chat turn against `pywrangler dev` and confirm
-   the profile actually appears in KV (`wrangler kv key list --binding
-   PROFILES_KV`) before trusting this in production. If it doesn't compose,
-   the fix is to bypass Flask's async view for this one code path — e.g.
-   read/write KV directly in `src/worker.py`'s own `fetch()` (which already
-   runs on Pyodide's native loop) and pass the loaded profile into the WSGI
-   call via `environ`, rather than awaiting from inside the Flask view.
+1. **How `env` reaches Flask.** Originally guessed as
+   `request.environ["env"]`; confirmed wrong and fixed to
+   `request.environ["workers.env"]` against Cloudflare's own documented
+   Flask example
+   (developers.cloudflare.com/workers/languages/python/packages/flask/,
+   which shows `request.environ["workers.env"].ASSETS`). See
+   `apply_cloudflare_env_overrides()` in `app.py` and `_get_env()` in
+   `cf/kv_store.py`.
+2. **Whether `await`ing a KV Promise works inside Flask's built-in
+   async-view support.** It does not. `/api/chat` and `/api/reset` were
+   originally `async def`, relying on Flask 3's async-view support
+   (`asgiref.sync.async_to_sync`) to bridge them - the normal approach
+   under gunicorn, where no event loop is already running in the sync WSGI
+   worker thread. On Cloudflare Workers that assumption is false: Python
+   Workers' `on_fetch` is itself async and already runs inside Pyodide's
+   own event loop, so `asgiref`'s `AsyncToSync` fails as soon as it
+   detects one, with:
+   ```
+   RuntimeError: You cannot use AsyncToSync in the same thread as an
+   async event loop - just await the async function directly.
+   ```
+   confirmed via a live deploy and `wrangler tail`. Fixed per Cloudflare's
+   own documented pattern for Flask on Python Workers (same URL as above,
+   "Serve a frontend" example, which bridges `ASSETS.fetch()` the same
+   way): `/api/chat` and `/api/reset` are now plain synchronous `def`
+   views, and the one awaitable call each needs
+   (`profiler.update()`/`profiler.delete()`) is bridged through a small
+   `_run_async()` helper in `app.py` - `pyodide.ffi.run_sync(coro)` on
+   Workers (built for running an awaitable to completion from a call stack
+   entered via an async Python function, which is exactly this situation),
+   or plain `asyncio.run(coro)` everywhere else, where there is no
+   already-running loop to conflict with.
 
 ## Prerequisites
 

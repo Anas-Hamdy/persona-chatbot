@@ -1,7 +1,3 @@
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "persona-chatbot-worker"
 version = "0.1.0"
@@ -43,20 +39,20 @@ dev = [
     "workers-runtime-sdk>=1.8.2",
 ]
 
-[tool.setuptools]
-# Cloudflare's own docs: "Wrangler uploads your Python code and any packages
-# included in your pyproject.toml" - meaning only files that are actually
-# part of THIS built package get uploaded to the Worker. Without this
-# section, pip built an empty wheel (confirmed via an earlier deploy log
-# that only showed empty *.egg-info metadata under "Attaching additional
-# modules", never our real source), so `import cf.kv_store` (and app.py/
-# chatbot_engine.py/profiler.py, imported by src/worker.py and app.py)
-# failed at deploy time with ModuleNotFoundError. This explicitly declares
-# every local module/package src/worker.py's import chain actually needs.
-py-modules = ["app", "chatbot_engine", "profiler"]
-packages = ["cf"]
-# NOTE: this does not yet package templates/index.html (used by app.py's
-# render_template call) - that is a flat top-level directory, not part of
-# any Python package, so [tool.setuptools.package-data] doesn't apply to it
-# cleanly. Left for the next deploy attempt to reveal whether it's actually
-# needed at runtime before guessing at a fix for it.
+# Revision note: this file used to also have a [build-system] table and a
+# [tool.setuptools] section declaring py-modules=["app","chatbot_engine",
+# "profiler"] and packages=["cf"], added to fix a real
+# "ModuleNotFoundError: No module named 'cf'" at deploy time. That was the
+# wrong fix and became actively harmful once the real fix (moving app.py/
+# chatbot_engine.py/profiler.py/cf/ into src/, alongside worker.py - see
+# src/worker.py's comment) landed: those paths no longer existed at the
+# repo root, so `uv run pywrangler deploy` started failing outright with
+# "file app.py (for module app) not found ... error: package directory
+# 'cf' does not exist" - `uv run` builds the project as an editable install
+# by default when a [build-system] table is present, and that stale config
+# broke the build. Cloudflare's own documented pyproject.toml for Flask on
+# Python Workers (developers.cloudflare.com/workers/languages/python/
+# packages/flask/) has neither section at all - Python Workers bundles
+# source from the `main` entrypoint's directory (see wrangler.jsonc),
+# it does not need this project installed as a package. Removed both
+# sections to match that example exactly.

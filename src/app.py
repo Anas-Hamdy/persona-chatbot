@@ -124,28 +124,44 @@ _MAX_TRACKED_USERS = 5000  # simple cap so an idle demo server can't grow foreve
 _cf_env_checked = False
 
 
-@app.before_request
-def _apply_cloudflare_env_overrides():
+def apply_cloudflare_env_overrides(environ: dict) -> None:
     """On Cloudflare Workers, wrangler.jsonc's `vars`/`secrets` and bindings
     are only reachable through the per-request `env` object - never through
     os.getenv() at import time (see the comment above `_on_workers`). This
-    runs once, on the first real request, and re-applies SECRET_KEY /
-    STORAGE_BACKEND from `env` if one is found. It is a no-op (and cheap -
-    one dict lookup) on every other deployment, where `environ["workers.env"]`
-    is simply never present.
+    re-applies SECRET_KEY / STORAGE_BACKEND from `env` if one is found. It
+    is a no-op (and cheap - one dict lookup) on every other deployment,
+    where `environ["workers.env"]` is simply never present.
 
-    Revision note: this used to read `request.environ["env"]`, an unconfirmed
-    guess. Confirmed correct key against Cloudflare's own documented Flask
-    example (developers.cloudflare.com/workers/languages/python/packages/flask/,
+    Revision note (1): this used to read `request.environ["env"]`, an
+    unconfirmed guess. Confirmed correct key against Cloudflare's own
+    documented Flask example
+    (developers.cloudflare.com/workers/languages/python/packages/flask/,
     which shows `request.environ["workers.env"].ASSETS`) - it's
     `"workers.env"`, not `"env"`.
+
+    Revision note (2): this used to be a `@app.before_request` hook reading
+    `flask.request.environ`. That was wrong in a way that only showed up on
+    a live deploy: Flask opens the session object
+    (`session_interface.open_session(...)`) as part of building the request
+    context, which happens BEFORE any before_request hook runs. So by the
+    time this hook set `app.secret_key`, Flask had already opened the
+    session with `secret_key=None`, gotten back a NullSession, and every
+    `session[...]` access for the rest of that request raised
+    "RuntimeError: The session is unavailable because no secret key was
+    set" - confirmed via `wrangler tail`, which showed this function's own
+    "Switched profile storage to Cloudflare KV" log line succeed
+    immediately before that exact exception. Fixed by calling this from a
+    plain WSGI middleware in worker.py instead, wrapping flask_app so it
+    runs before flask_app(environ, start_response) - i.e. before Flask
+    even starts building the request context - while still running at
+    request time (not import time), so secrets.token_hex() below is legal.
     """
     global _cf_env_checked
     if _cf_env_checked:
         return
     _cf_env_checked = True
 
-    env = request.environ.get("workers.env")
+    env = environ.get("workers.env")
     if env is None:
         return
 
@@ -174,6 +190,41 @@ def _apply_cloudflare_env_overrides():
             logger.info("Switched profile storage to Cloudflare KV based on env.STORAGE_BACKEND.")
     except Exception:
         logger.exception("Failed to apply Cloudflare env overrides; continuing with import-time config.")
+
+
+def _run_async(coro):
+    """Bridge from Flask's synchronous view functions to this app's async
+    ProfileStore interface (see profiler.py's ProfileStore docstring).
+
+    Flask views here are deliberately plain `def`, not `async def`. An
+    earlier version made /api/chat and /api/reset `async def` and relied on
+    Flask 3's built-in async-view support (asgiref.sync.async_to_sync) to
+    bridge them - that is the documented approach for a normal WSGI server
+    (gunicorn), but it broke on a live Cloudflare Workers deploy:
+    RuntimeError: "You cannot use AsyncToSync in the same thread as an
+    async event loop - just await the async function directly." Root
+    cause: Python Workers' on_fetch is itself async and already runs
+    inside Pyodide's own event loop, so asgiref's AsyncToSync (which
+    assumes it is being called from a plain sync thread with no running
+    loop) fails as soon as it detects one already running.
+
+    Fixed per Cloudflare's own documented pattern for Flask on Python
+    Workers (developers.cloudflare.com/workers/languages/python/packages/
+    flask/, "Serve a frontend" example, which bridges ASSETS.fetch() the
+    same way): keep views synchronous, and bridge the one awaitable call
+    each needs with `pyodide.ffi.run_sync`, which is built for exactly
+    this - running an awaitable to completion from inside a call stack
+    that was entered via an async Python function (true here, since
+    Workers' WSGI bridge calls this synchronous app from its own async
+    on_fetch). Off Workers (gunicorn/`python app.py`), there is no
+    already-running loop in a sync WSGI worker thread, so plain
+    asyncio.run() works instead.
+    """
+    if _on_workers:
+        from pyodide.ffi import run_sync
+        return run_sync(coro)
+    import asyncio
+    return asyncio.run(coro)
 
 
 def _get_user_id() -> str:
@@ -210,12 +261,9 @@ def healthz():
 
 
 @app.route("/api/chat", methods=["POST"])
-async def chat():
-    # async because ProfileStore.load/save must be awaited for the
-    # Cloudflare KV backend (KV get/put/delete return Promises - see
-    # profiler.py's ProfileStore docstring and cf/kv_store.py). Flask 3
-    # runs async views via asgiref under gunicorn/dev server too, so this
-    # works unchanged for the local/gunicorn (file-backed) deployment.
+def chat():
+    # Deliberately sync - see _run_async's docstring for why `async def`
+    # here breaks on Cloudflare Workers.
     payload = request.get_json(silent=True)
     if payload is None:
         return jsonify({"error": "request body must be valid JSON"}), 400
@@ -230,7 +278,7 @@ async def chat():
     history = _touch_history(user_id)
 
     try:
-        profile = await profiler.update(user_id, message)
+        profile = _run_async(profiler.update(user_id, message))
         reply = engine.reply(message, profile, history)
     except Exception:
         logger.exception("Unhandled error while generating a reply for user %s", user_id)
@@ -249,11 +297,12 @@ async def chat():
 
 
 @app.route("/api/reset", methods=["POST"])
-async def reset():
+def reset():
+    # Deliberately sync - see _run_async's docstring.
     user_id = _get_user_id()
     _HISTORY.pop(user_id, None)
     _HISTORY_LAST_SEEN.pop(user_id, None)
-    await profiler.delete(user_id)
+    _run_async(profiler.delete(user_id))
     return jsonify({"status": "ok"})
 
 

@@ -38,6 +38,17 @@ from workers import wsgi  # provided by the Workers Python runtime
 # time. This directory layout is now the single source of truth for both
 # the gunicorn deployment (see Procfile's --chdir src) and this Worker.
 
-from app import app as flask_app
+from app import app as flask_app, apply_cloudflare_env_overrides
 
-Default = wsgi.entrypoint(flask_app)
+
+def _app_with_env_setup(environ, start_response):
+    # Must run before flask_app(environ, start_response) - Flask opens the
+    # session as part of its own wsgi_app, before any before_request hook
+    # gets a chance to run. See apply_cloudflare_env_overrides's docstring
+    # (revision note 2) in app.py for the live-deploy traceback that proved
+    # this ordering matters.
+    apply_cloudflare_env_overrides(environ)
+    return flask_app(environ, start_response)
+
+
+Default = wsgi.entrypoint(_app_with_env_setup)

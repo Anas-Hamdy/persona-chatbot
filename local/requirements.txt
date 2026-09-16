@@ -12,5 +12,5 @@ numpy==1.26.4
 # Left uncommented so `pip install -r requirements.txt` gives a fully
 # working install out of the box; remove either line if you never plan
 # to use that provider and want a smaller install.
-openai==1.51.0
+openai==1.59.9
 anthropic==0.34.2

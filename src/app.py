@@ -188,6 +188,14 @@ def apply_cloudflare_env_overrides(environ: dict) -> None:
         if storage_backend == "kv" and not isinstance(profiler.store, KVProfileStore):
             profiler.store = KVProfileStore(getattr(env, "KV_BINDING_NAME", "PROFILES_KV"))
             logger.info("Switched profile storage to Cloudflare KV based on env.STORAGE_BACKEND.")
+
+        # Same reasoning as the SECRET_KEY/STORAGE_BACKEND overrides above:
+        # ChatEngine.__init__ ran at module import time and could not see
+        # env.OPENAI_API_KEY / env.ALLOW_LLM_ON_WORKERS (os.getenv() sees
+        # nothing on Workers), so it always chose the offline generator.
+        # This re-picks the backend now that a real `env` is available.
+        engine.refresh_from_env(env)
+        logger.info("Chat backend after applying Workers env: %s", engine.backend_name)
     except Exception:
         logger.exception("Failed to apply Cloudflare env overrides; continuing with import-time config.")
 

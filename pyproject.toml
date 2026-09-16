@@ -24,6 +24,30 @@ requires-python = ">=3.12"
 dependencies = [
     "flask==3.0.3",
     "asgiref==3.8.1",
+    # Optional LLM backend (see chatbot_engine.py's _OpenAIGenerator) - only
+    # used when ALLOW_LLM_ON_WORKERS=1 (wrangler.jsonc vars) and the
+    # OPENAI_API_KEY secret are both set; the app runs the offline template
+    # generator otherwise. The openai SDK calls out via httpx.Client
+    # (synchronous). Cloudflare's own python-workers-examples repo has a
+    # dedicated "sync-http-clients" example confirming requests/urllib3/
+    # httpx.Client all work directly on Python Workers, which is why this
+    # is listed as a plain dependency here rather than needing a custom
+    # async fetch bridge - verify this actually resolves against Pyodide's
+    # package index on the next `uv sync`/`pywrangler deploy` before
+    # trusting it in production, since pydantic-core (an openai dependency)
+    # ships as a compiled wheel and its Pyodide/emscripten build has not
+    # been separately confirmed here yet.
+    #
+    # Pinned to >=1.55 (not the originally-tried 1.51.0): confirmed via a
+    # real client-construction test that openai==1.51.0 crashes with
+    # `TypeError: Client.__init__() got an unexpected keyword argument
+    # 'proxies'` against httpx>=0.28 (openai 1.51.0 still passes a
+    # `proxies=` kwarg to httpx.Client that 0.28 removed) - this is a real,
+    # reproducible incompatibility, not a Workers-specific issue, and would
+    # have broken the local/gunicorn deployment too (local/requirements.txt
+    # updated to match). 1.59.9 was verified locally to construct an
+    # OpenAI(api_key=...) client successfully with httpx 0.28.1 installed.
+    "openai==1.59.9",
 ]
 
 [dependency-groups]

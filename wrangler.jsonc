@@ -30,7 +30,16 @@
 	"vars": {
 		"STORAGE_BACKEND": "kv",
 		"FLASK_ENV": "production",
-		"KV_BINDING_NAME": "PROFILES_KV"
+		"KV_BINDING_NAME": "PROFILES_KV",
+		// Opt-in switch read by chatbot_engine.py._select_backend() - without
+		// it, the app always uses the offline template generator on Workers
+		// regardless of OPENAI_API_KEY, since that unverified-on-Pyodide sync
+		// HTTP question used to be an open one. Cloudflare's own
+		// python-workers-examples repo (sync-http-clients/) confirms
+		// synchronous httpx.Client (what the openai SDK uses) works on
+		// Python Workers, so this is now turned on - set OPENAI_API_KEY with
+		// `wrangler secret put OPENAI_API_KEY` for it to actually take effect.
+		"ALLOW_LLM_ON_WORKERS": "1"
 	},
 	// Created with `wrangler kv namespace create PROFILES_KV` - paste the
 	// returned id below before deploying (see the deployment commands).

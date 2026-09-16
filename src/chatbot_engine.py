@@ -30,6 +30,11 @@ from profiler import ImplicitProfile
 
 logger = logging.getLogger("persona_chatbot.engine")
 
+# Same detection app.py uses for _on_workers - kept as a separate constant
+# here (rather than imported from app.py) to avoid a circular import
+# (app.py imports ChatEngine from this module).
+_on_workers = "pyodide" in __import__("sys").modules or __import__("sys").platform == "emscripten"
+
 
 SYSTEM_PROMPT_TEMPLATE = """You are a personalized conversational assistant.
 Adapt your tone, vocabulary, and the examples you use to match the user
@@ -86,9 +91,14 @@ class _OfflineGenerator:
 
 
 class _OpenAIGenerator:
-    def __init__(self, model: str = "gpt-4o-mini"):
+    def __init__(self, api_key: str | None = None, model: str = "gpt-4o-mini"):
         from openai import OpenAI  # imported lazily so the offline path never needs it
-        self._client = OpenAI()
+        # Pass api_key explicitly rather than relying on the SDK's own
+        # os.environ["OPENAI_API_KEY"] lookup - that lookup returns nothing
+        # on Cloudflare Workers, where secrets are only reachable through
+        # the per-request `env` object, never os.environ (see
+        # ChatEngine._select_backend's revision note).
+        self._client = OpenAI(api_key=api_key) if api_key else OpenAI()
         self._model = model
 
     def reply(self, message: str, profile: ImplicitProfile, history: List[Dict]) -> str:
@@ -106,9 +116,9 @@ class _OpenAIGenerator:
 
 
 class _AnthropicGenerator:
-    def __init__(self, model: str = "claude-3-5-haiku-20241022"):
+    def __init__(self, api_key: str | None = None, model: str = "claude-3-5-haiku-20241022"):
         import anthropic  # imported lazily
-        self._client = anthropic.Anthropic()
+        self._client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
         self._model = model
 
     def reply(self, message: str, profile: ImplicitProfile, history: List[Dict]) -> str:
@@ -129,41 +139,81 @@ class ChatEngine:
     def __init__(self):
         self._backend_name, self._backend = self._select_backend()
 
-    def _select_backend(self):
-        # On Cloudflare Workers (Pyodide), only async HTTP clients are
-        # confirmed supported (see docs/CLOUDFLARE_DEPLOYMENT.md); the
-        # openai/anthropic SDKs make synchronous HTTP calls, which have not
-        # been verified to work in that runtime. Require an explicit opt-in
-        # there so a misconfigured deploy fails loudly (falls back to the
-        # offline generator) rather than silently, unpredictably breaking.
-        on_workers = os.getenv("STORAGE_BACKEND") == "kv"
-        allow_llm = not on_workers or os.getenv("ALLOW_LLM_ON_WORKERS") == "1"
+    def _select_backend(self, env=None):
+        """Pick a reply backend.
+
+        `env` is Cloudflare's per-request Workers `env` object (the same
+        one app.py's `apply_cloudflare_env_overrides` reads for
+        SECRET_KEY/STORAGE_BACKEND) - passed in only by `refresh_from_env()`
+        below. It is None here at `__init__` time and on every other
+        deployment (gunicorn/`python app.py`), where `os.getenv()` already
+        sees real process environment variables directly.
+
+        Revision note: this used to read STORAGE_BACKEND/OPENAI_API_KEY/
+        ANTHROPIC_API_KEY/ALLOW_LLM_ON_WORKERS purely via `os.getenv()`
+        inside `__init__`, which runs once at Worker cold start (module
+        import time) - before any request, and therefore before any real
+        `env`, exists on Cloudflare Workers. That is the exact mistake
+        already fixed once for SECRET_KEY (see app.py's
+        `_on_workers`/`apply_cloudflare_env_overrides` comments):
+        `os.getenv()` can never see wrangler.jsonc's `vars`/secrets on
+        Workers, so `on_workers` evaluated to `False` and every key lookup
+        below silently returned nothing no matter what was actually
+        configured - the engine always fell back to the offline generator
+        on a real deploy, regardless of OPENAI_API_KEY/
+        ALLOW_LLM_ON_WORKERS. Fixed by accepting the real `env` object and
+        being re-invoked once per isolate via `refresh_from_env()`, called
+        from `apply_cloudflare_env_overrides()` in app.py, which is the one
+        place that object is actually reachable.
+
+        On the sync-HTTP-clients question itself: Cloudflare's own
+        python-workers-examples repo has a dedicated `sync-http-clients`
+        example confirming `requests`/`urllib3`/`httpx.Client` (what the
+        openai/anthropic SDKs use) all work directly on Python Workers -
+        this used to be geniunely unverified when `ALLOW_LLM_ON_WORKERS`
+        was first added; it no longer is, which is why that flag now
+        defaults to being turned on in wrangler.jsonc's vars.
+        """
+        def _get(name: str) -> str | None:
+            if env is not None:
+                return getattr(env, name, None)
+            return os.getenv(name)
+
+        allow_llm = not _on_workers or _get("ALLOW_LLM_ON_WORKERS") == "1"
         if not allow_llm:
             logger.warning(
-                "Running under the Cloudflare Workers backend: skipping the "
-                "OpenAI/Anthropic SDKs (unverified sync-HTTP support on this "
-                "runtime) and using the offline template generator. Set "
-                "ALLOW_LLM_ON_WORKERS=1 to try anyway."
+                "Running on Cloudflare Workers with ALLOW_LLM_ON_WORKERS not "
+                "set to \"1\" - using the offline template generator."
             )
             return "offline-template", _OfflineGenerator()
 
-        if os.getenv("OPENAI_API_KEY"):
+        openai_key = _get("OPENAI_API_KEY")
+        if openai_key:
             try:
-                return "openai", _OpenAIGenerator()
+                return "openai", _OpenAIGenerator(api_key=openai_key)
             except Exception:
                 logger.warning(
                     "OPENAI_API_KEY is set but the OpenAI backend failed to initialize; "
                     "falling back to the offline template generator.", exc_info=True,
                 )
-        if os.getenv("ANTHROPIC_API_KEY"):
+        anthropic_key = _get("ANTHROPIC_API_KEY")
+        if anthropic_key:
             try:
-                return "anthropic", _AnthropicGenerator()
+                return "anthropic", _AnthropicGenerator(api_key=anthropic_key)
             except Exception:
                 logger.warning(
                     "ANTHROPIC_API_KEY is set but the Anthropic backend failed to initialize; "
                     "falling back to the offline template generator.", exc_info=True,
                 )
         return "offline-template", _OfflineGenerator()
+
+    def refresh_from_env(self, env) -> None:
+        """Re-pick the backend using a real Cloudflare Workers `env`
+        object. Call once per isolate, from app.py's
+        `apply_cloudflare_env_overrides()` - the only place that object is
+        reachable - after the module-import-time `_select_backend()` call
+        (which cannot see it) already ran with nothing configured."""
+        self._backend_name, self._backend = self._select_backend(env)
 
     @property
     def backend_name(self) -> str:

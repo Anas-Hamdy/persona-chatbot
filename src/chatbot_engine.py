@@ -46,6 +46,23 @@ profile - just let the reply feel naturally suited to this person.
 
 Keep replies concise (2-4 sentences) and natural."""
 
+# Used only for the /admin/stats "personalized vs generic" comparison
+# feature (app.py's ChatEngine.compare()) - a neutral baseline system
+# prompt with the same length constraint but none of the profile
+# conditioning, so a side-by-side reply pair isolates exactly what the
+# implicit profile changed. Never used for the actual reply saved to a
+# user's chat history - only for this on-demand comparison.
+GENERIC_SYSTEM_PROMPT = """You are a helpful conversational assistant.
+Keep replies concise (2-4 sentences) and natural."""
+
+
+def build_system_prompt(profile: "ImplicitProfile") -> str:
+    """The exact personalized system prompt a request would use - exposed
+    so app.py can show it back to the user for transparency (what the
+    thesis's "conditional generation" strategy actually injected), without
+    needing a second API call."""
+    return SYSTEM_PROMPT_TEMPLATE.format(profile_brief=profile.as_prompt_fragment())
+
 
 class _OfflineGenerator:
     """A small, transparent template engine used when no LLM key is set.
@@ -101,8 +118,7 @@ class _OpenAIGenerator:
         self._client = OpenAI(api_key=api_key) if api_key else OpenAI()
         self._model = model
 
-    def reply(self, message: str, profile: ImplicitProfile, history: List[Dict]) -> str:
-        system_prompt = SYSTEM_PROMPT_TEMPLATE.format(profile_brief=profile.as_prompt_fragment())
+    def _complete(self, system_prompt: str, message: str, history: List[Dict]) -> str:
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(history[-6:])
         messages.append({"role": "user", "content": message})
@@ -114,6 +130,14 @@ class _OpenAIGenerator:
         )
         return completion.choices[0].message.content.strip()
 
+    def reply(self, message: str, profile: ImplicitProfile, history: List[Dict]) -> str:
+        return self._complete(build_system_prompt(profile), message, history)
+
+    def reply_generic(self, message: str, history: List[Dict]) -> str:
+        """Same call, but with the neutral GENERIC_SYSTEM_PROMPT instead of
+        the profile-conditioned one - used only by ChatEngine.compare()."""
+        return self._complete(GENERIC_SYSTEM_PROMPT, message, history)
+
 
 class _AnthropicGenerator:
     def __init__(self, api_key: str | None = None, model: str = "claude-3-5-haiku-20241022"):
@@ -121,8 +145,7 @@ class _AnthropicGenerator:
         self._client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
         self._model = model
 
-    def reply(self, message: str, profile: ImplicitProfile, history: List[Dict]) -> str:
-        system_prompt = SYSTEM_PROMPT_TEMPLATE.format(profile_brief=profile.as_prompt_fragment())
+    def _complete(self, system_prompt: str, message: str, history: List[Dict]) -> str:
         messages = list(history[-6:]) + [{"role": "user", "content": message}]
         response = self._client.messages.create(
             model=self._model,
@@ -131,6 +154,14 @@ class _AnthropicGenerator:
             max_tokens=220,
         )
         return "".join(block.text for block in response.content if hasattr(block, "text")).strip()
+
+    def reply(self, message: str, profile: ImplicitProfile, history: List[Dict]) -> str:
+        return self._complete(build_system_prompt(profile), message, history)
+
+    def reply_generic(self, message: str, history: List[Dict]) -> str:
+        """Same call, but with the neutral GENERIC_SYSTEM_PROMPT instead of
+        the profile-conditioned one - used only by ChatEngine.compare()."""
+        return self._complete(GENERIC_SYSTEM_PROMPT, message, history)
 
 
 class ChatEngine:
@@ -218,6 +249,50 @@ class ChatEngine:
     @property
     def backend_name(self) -> str:
         return self._backend_name
+
+    @property
+    def supports_comparison(self) -> bool:
+        """Whether the current backend can run the personalized-vs-generic
+        comparison (see compare() below) - true only for a real LLM
+        backend (openai/anthropic), since _OfflineGenerator's replies are
+        template-driven rather than a single conditioned model call, so a
+        "same model, different prompt" comparison doesn't apply to it."""
+        return hasattr(self._backend, "reply_generic")
+
+    def system_prompt_for(self, profile: ImplicitProfile) -> str:
+        """The exact personalized system prompt the current turn would use
+        - exposed for transparency in the chat UI, at zero extra API cost
+        (this does not call the model)."""
+        return build_system_prompt(profile)
+
+    def compare(self, message: str, profile: ImplicitProfile, history: List[Dict]) -> dict | None:
+        """Run the SAME message through the SAME model twice - once with
+        the real, profile-conditioned system prompt, once with the neutral
+        GENERIC_SYSTEM_PROMPT - so the effect of the implicit profile on
+        the reply is directly visible side by side, not just asserted.
+        Returns None if the current backend doesn't support this (see
+        supports_comparison) or if either call fails. Costs one extra LLM
+        call - only invoked when the caller (app.py's /api/chat, via the
+        `compare` request flag) explicitly asks for it, never on every
+        turn by default.
+        """
+        if not self.supports_comparison:
+            return None
+        try:
+            personalized_reply = self._backend.reply(message, profile, history)
+            generic_reply = self._backend.reply_generic(message, history)
+        except Exception:
+            logger.warning(
+                "Comparison call failed for backend=%s; skipping comparison for this turn.",
+                self._backend_name, exc_info=True,
+            )
+            return None
+        return {
+            "personalized_reply": personalized_reply,
+            "generic_reply": generic_reply,
+            "personalized_system_prompt": build_system_prompt(profile),
+            "generic_system_prompt": GENERIC_SYSTEM_PROMPT,
+        }
 
     def reply(self, message: str, profile: ImplicitProfile, history: List[Dict]) -> str:
         try:

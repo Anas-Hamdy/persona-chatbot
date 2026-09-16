@@ -26,7 +26,8 @@ from collections import Counter
 
 from chatbot_engine import ChatEngine
 from profiler import ImplicitProfiler
-from cf.kv_store import KVProfileStore  # safe to import unconditionally - no Workers-only deps at import time
+from comparison_log import FileComparisonLog
+from cf.kv_store import KVProfileStore, KVComparisonLog  # safe to import unconditionally - no Workers-only deps at import time
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("persona_chatbot")
@@ -106,8 +107,10 @@ app.config["SESSION_COOKIE_SECURE"] = os.getenv("FLASK_ENV") == "production"
 #                       persistent local filesystem, so "file" cannot work there).
 if os.getenv("STORAGE_BACKEND", "file") == "kv":
     profiler = ImplicitProfiler(store=KVProfileStore(os.getenv("KV_BINDING_NAME", "PROFILES_KV")))
+    comparison_log = KVComparisonLog(os.getenv("KV_BINDING_NAME", "PROFILES_KV"))
 else:
     profiler = ImplicitProfiler(storage_dir=os.getenv("PROFILE_STORAGE_DIR", "profiles"))
+    comparison_log = FileComparisonLog(os.getenv("COMPARISON_STORAGE_DIR", "comparisons"))
 engine = ChatEngine()
 
 # In-memory per-user chat history. This is intentionally simple for a
@@ -190,6 +193,9 @@ def apply_cloudflare_env_overrides(environ: dict) -> None:
         if storage_backend == "kv" and not isinstance(profiler.store, KVProfileStore):
             profiler.store = KVProfileStore(getattr(env, "KV_BINDING_NAME", "PROFILES_KV"))
             logger.info("Switched profile storage to Cloudflare KV based on env.STORAGE_BACKEND.")
+        global comparison_log
+        if storage_backend == "kv" and not isinstance(comparison_log, KVComparisonLog):
+            comparison_log = KVComparisonLog(getattr(env, "KV_BINDING_NAME", "PROFILES_KV"))
 
         # Same reasoning as the SECRET_KEY/STORAGE_BACKEND overrides above:
         # ChatEngine.__init__ ran at module import time and could not see
@@ -270,6 +276,25 @@ def healthz():
     return jsonify({"status": "ok", "backend": engine.backend_name}), 200
 
 
+def _text_divergence(a: str, b: str) -> float:
+    """Word-overlap (Jaccard) distance between two replies: 0.0 = identical
+    wording, 1.0 = no words in common. Deliberately simple/explainable
+    (no embeddings or extra ML dependency) rather than a semantic-
+    similarity model - good enough to give /admin/stats an honest,
+    reproducible number for "how different was the personalized reply
+    from the generic one", not a claim of deep semantic measurement."""
+    import re
+    tokens_a = set(re.findall(r"[a-z']+", a.lower()))
+    tokens_b = set(re.findall(r"[a-z']+", b.lower()))
+    if not tokens_a and not tokens_b:
+        return 0.0
+    union = tokens_a | tokens_b
+    if not union:
+        return 0.0
+    intersection = tokens_a & tokens_b
+    return 1 - (len(intersection) / len(union))
+
+
 @app.route("/api/chat", methods=["POST"])
 def chat():
     # Deliberately sync - see _run_async's docstring for why `async def`
@@ -284,12 +309,24 @@ def chat():
     if len(message) > 4000:
         return jsonify({"error": "message too long (max 4000 characters)"}), 400
 
+    # Opt-in: when true, run the SAME message through the SAME model twice
+    # (personalized system prompt vs a neutral one) so the effect of the
+    # implicit profile is directly visible, not just asserted. Costs one
+    # extra LLM call - never on by default (see ChatEngine.compare()).
+    compare_mode = bool(payload.get("compare"))
+
     user_id = _get_user_id()
     history = _touch_history(user_id)
 
+    comparison = None
     try:
         profile = _run_async(profiler.update(user_id, message))
-        reply = engine.reply(message, profile, history)
+        if compare_mode:
+            comparison = engine.compare(message, profile, history)
+        if comparison:
+            reply = comparison["personalized_reply"]
+        else:
+            reply = engine.reply(message, profile, history)
     except Exception:
         logger.exception("Unhandled error while generating a reply for user %s", user_id)
         return jsonify({"error": "something went wrong generating a reply, please try again"}), 500
@@ -298,12 +335,41 @@ def chat():
     history.append({"role": "assistant", "content": reply})
     del history[:-_MAX_HISTORY_TURNS]
 
-    return jsonify({
+    response = {
         "reply": reply,
         "profile": profile.to_dict(),
         "profile_brief": profile.as_prompt_fragment(),
         "backend": engine.backend_name,
-    })
+        # Shown for transparency even outside compare mode, at zero extra
+        # API cost - this is the literal conditioning text the "conditional
+        # generation" strategy (chatbot_engine.py's module docstring)
+        # injected for this turn, or None for the offline template backend
+        # (which has no system prompt / LLM call at all).
+        "system_prompt": engine.system_prompt_for(profile) if engine.supports_comparison else None,
+    }
+
+    if compare_mode:
+        if comparison is None:
+            response["comparison_error"] = (
+                "Comparison is only available with a live LLM backend (openai/anthropic), "
+                "or the comparison call itself failed - check server logs."
+            )
+        else:
+            divergence = _text_divergence(comparison["personalized_reply"], comparison["generic_reply"])
+            comparison["divergence_score"] = divergence
+            response["comparison"] = comparison
+            _run_async(comparison_log.append({
+                "user_id": user_id,
+                "message": message,
+                "personalized_reply": comparison["personalized_reply"],
+                "generic_reply": comparison["generic_reply"],
+                "personalized_system_prompt": comparison["personalized_system_prompt"],
+                "generic_system_prompt": comparison["generic_system_prompt"],
+                "divergence_score": divergence,
+                "backend": engine.backend_name,
+            }))
+
+    return jsonify(response)
 
 
 @app.route("/api/reset", methods=["POST"])
@@ -410,6 +476,22 @@ def admin_stats():
         reverse=True,
     )
 
+    comparisons = _run_async(comparison_log.list_all())
+    total_comparisons = len(comparisons)
+    avg_divergence = (
+        sum(c.get("divergence_score", 0.0) for c in comparisons) / total_comparisons
+        if total_comparisons else 0.0
+    )
+    recent_comparisons = [
+        {
+            "message": c.get("message", ""),
+            "personalized_reply": c.get("personalized_reply", ""),
+            "generic_reply": c.get("generic_reply", ""),
+            "divergence_score": c.get("divergence_score", 0.0),
+        }
+        for c in comparisons[:20]
+    ]
+
     return render_template(
         "admin_stats.html",
         total_users=total_users,
@@ -425,6 +507,10 @@ def admin_stats():
         sentiment_bars=sentiment_bars,
         formality_bars=formality_bars,
         user_rows=user_rows,
+        total_comparisons=total_comparisons,
+        avg_divergence=avg_divergence,
+        recent_comparisons=recent_comparisons,
+        supports_comparison=engine.supports_comparison,
     )
 
 

@@ -27,6 +27,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from profiler import ProfileStore
+from comparison_log import ComparisonLog
 
 
 def _get_env() -> Optional[Any]:
@@ -101,3 +102,70 @@ class KVProfileStore(ProfileStore):
             if not cursor:
                 break
         return user_ids
+
+
+class KVComparisonLog(ComparisonLog):
+    """KV-backed personalized-vs-generic comparison log (see
+    comparison_log.py's docstring). Stored in the same PROFILES_KV
+    namespace as profiles, under a distinct "cmp:" prefix - simplest since
+    both are small-volume, low-write-rate data for the same research demo,
+    and wrangler.jsonc already binds this one namespace."""
+
+    def __init__(self, binding_name: str = "PROFILES_KV"):
+        self.binding_name = binding_name
+
+    def _kv(self):
+        env = _get_env()
+        if env is None:
+            raise RuntimeError(
+                "No Workers `env` available - KVComparisonLog can only be used "
+                "when running as a Cloudflare Worker (see src/worker.py)."
+            )
+        kv = getattr(env, self.binding_name, None)
+        if kv is None:
+            raise RuntimeError(
+                f"KV binding '{self.binding_name}' not found on env. Check the "
+                f"kv_namespaces block in wrangler.jsonc matches this name."
+            )
+        return kv
+
+    async def append(self, record: dict) -> None:
+        import json
+        import time
+        import uuid
+        record = dict(record)
+        record.setdefault("timestamp", time.time())
+        key = f"cmp:{int(record['timestamp'] * 1000):015d}_{uuid.uuid4().hex[:8]}"
+        await self._kv().put(key, json.dumps(record))
+
+    async def list_all(self, limit: int = 200) -> list[dict]:
+        import json
+        kv = self._kv()
+        prefix = "cmp:"
+        keys: list[str] = []
+        cursor = None
+        while True:
+            options = {"prefix": prefix}
+            if cursor:
+                options["cursor"] = cursor
+            result = await kv.list(options)
+            for key in result["keys"]:
+                keys.append(key["name"])
+            if result["list_complete"] or len(keys) >= limit:
+                break
+            cursor = result["cursor"]
+            if not cursor:
+                break
+        # Newest first, matching FileComparisonLog.list_all()'s ordering -
+        # the timestamp-prefixed key name sorts chronologically.
+        keys.sort(reverse=True)
+        records = []
+        for key in keys[:limit]:
+            raw = await kv.get(key)
+            if raw is None:
+                continue
+            try:
+                records.append(json.loads(raw))
+            except Exception:
+                continue
+        return records

@@ -14,3 +14,11 @@ h1 { font-size: 20px; margin: 0 0 4px; }
 button { padding: 10px 16px; border-radius: 8px; border: none; background: #2563eb; color: #fff; cursor: pointer; }
 .reset { background: transparent; color: #b91c1c; border: 1px solid #b91c1c; margin-top: 10px; align-self: flex-start; }
 #profile-box { white-space: pre-wrap; font-size: 13px; background: #0b0f17; padding: 12px; border-radius: 8px; }
+.compare-toggle { display: block; font-size: 12px; color: #555; margin: 8px 0; }
+.compare-wrap { display: flex; gap: 8px; margin: 6px 0; }
+.compare-col { flex: 1; background: #eee; border-radius: 10px; padding: 8px 12px; }
+.compare-col h4 { margin: 0 0 4px; font-size: 12px; color: #444; }
+.compare-col.personalized { background: #dbeafe; }
+.divergence { font-size: 12px; color: #444; margin: 4px 0 6px; }
+details.prompt-detail { font-size: 12px; color: #555; margin-top: 4px; }
+details.prompt-detail pre { white-space: pre-wrap; background: #fafafa; border: 1px solid #ddd; border-radius: 6px; padding: 8px; }

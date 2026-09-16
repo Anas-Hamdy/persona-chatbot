@@ -159,6 +159,14 @@
       <div class="label">Storage backend</div>
       <div class="value small">{{ storage_backend }}</div>
     </div>
+    <div class="stat-tile">
+      <div class="label">Comparisons run</div>
+      <div class="value">{{ total_comparisons }}</div>
+    </div>
+    <div class="stat-tile">
+      <div class="label">Avg divergence (personalized vs generic)</div>
+      <div class="value">{{ "%.0f"|format(avg_divergence * 100) }}%</div>
+    </div>
   </div>
 
   <div class="charts-grid">
@@ -226,6 +234,48 @@
       </div>
       {% endfor %}
     </div>
+  </div>
+
+  <div class="panel">
+    <h2>Personalized vs generic - proof of effect</h2>
+    <p class="panel-sub">
+      Same message, same model, two system prompts: one built from the tester's
+      inferred profile, one neutral with no profile at all. Divergence is a
+      word-overlap distance between the two replies (0% = identical wording,
+      100% = no shared words) - the quantitative evidence that the implicit
+      profile changes what the model says, not just a claim.
+      {% if not supports_comparison %}
+        Currently unavailable: comparison needs a live LLM backend (openai/
+        anthropic), not the offline template generator.
+      {% else %}
+        Trigger one from the chat page by checking "Show personalization
+        comparison" before sending a message.
+      {% endif %}
+    </p>
+    {% if recent_comparisons %}
+    <table>
+      <thead>
+        <tr>
+          <th>Message</th>
+          <th>Personalized reply</th>
+          <th>Generic reply</th>
+          <th>Divergence</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in recent_comparisons %}
+        <tr>
+          <td>{{ c.message }}</td>
+          <td>{{ c.personalized_reply }}</td>
+          <td>{{ c.generic_reply }}</td>
+          <td class="num">{{ "%.0f"|format(c.divergence_score * 100) }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No comparisons run yet.</p>
+    {% endif %}
   </div>
 
   <div class="panel">

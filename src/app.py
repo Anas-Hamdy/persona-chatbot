@@ -61,13 +61,28 @@ if not _secret_key:
         raise RuntimeError(
             "SECRET_KEY environment variable is required when FLASK_ENV=production."
         )
-    if not _on_workers:
+    if _on_workers:
+        # Cannot call secrets.token_hex()/os.urandom() here - Cloudflare
+        # bans randomness while "a Worker is starting" (i.e. at module
+        # import time, before any request), since a value generated now
+        # would be cached and repeated identically across isolate
+        # instances, which is exactly the predictability this exists to
+        # prevent. Confirmed via a real deploy attempt:
+        # OSError: [Errno 29] Randomness is not allowed while a Worker is
+        # starting (developers.cloudflare.com/workers/platform/limits/
+        # #worker-startup-time). Left unset here; _apply_cloudflare_env_
+        # overrides() below (a before_request hook - runs during request
+        # handling, after startup, when randomness is allowed again) sets
+        # the real value from env.SECRET_KEY, or generates a random
+        # fallback there if that's missing too.
+        _secret_key = None
+    else:
         logger.warning(
             "SECRET_KEY not set - generating a temporary one for this process. "
             "Sessions will be invalidated on restart and will NOT be shared across "
             "multiple worker processes. Set SECRET_KEY before deploying."
         )
-    _secret_key = secrets.token_hex(16)
+        _secret_key = secrets.token_hex(16)
 app.secret_key = _secret_key
 
 # Reject grossly oversized request bodies before they reach json parsing.
@@ -138,12 +153,20 @@ def _apply_cloudflare_env_overrides():
         env_secret_key = getattr(env, "SECRET_KEY", None)
         if env_secret_key:
             app.secret_key = env_secret_key
-        elif os.getenv("FLASK_ENV") == "production" or getattr(env, "FLASK_ENV", None) == "production":
-            logger.error(
-                "Running on Cloudflare Workers with no SECRET_KEY found on `env` - "
-                "sessions will use a random per-isolate key. Run: "
-                "wrangler secret put SECRET_KEY"
-            )
+        elif app.secret_key is None:
+            # Import time (see _on_workers above) deliberately left this
+            # unset, since generating it there would violate Cloudflare's
+            # "no randomness while a Worker is starting" rule. This runs
+            # during request handling instead, where secrets.token_hex()
+            # is safe to call.
+            app.secret_key = secrets.token_hex(16)
+            if os.getenv("FLASK_ENV") == "production" or getattr(env, "FLASK_ENV", None) == "production":
+                logger.error(
+                    "Running on Cloudflare Workers with no SECRET_KEY found on `env` - "
+                    "sessions will use a random per-isolate key that changes on every "
+                    "cold start, invalidating existing sessions unpredictably. Run: "
+                    "wrangler secret put SECRET_KEY"
+                )
 
         storage_backend = getattr(env, "STORAGE_BACKEND", None)
         if storage_backend == "kv" and not isinstance(profiler.store, KVProfileStore):

@@ -2,6 +2,7 @@
 # Cloudflare Workers deployment uses pyproject.toml instead (a much smaller,
 # Pyodide-compatible dependency list) - see docs/CLOUDFLARE_DEPLOYMENT.md.
 flask==3.0.3
+asgiref==3.8.1  # required by Flask for the async route handlers in app.py
 gunicorn==22.0.0
 scikit-learn==1.5.1
 nltk==3.9.1

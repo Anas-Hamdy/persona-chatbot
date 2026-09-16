@@ -126,29 +126,38 @@ class ImplicitProfile:
 
 
 class ProfileStore:
-    """Storage backend interface. `FileProfileStore` (below) is the default,
-    local-disk implementation used by `python app.py` / gunicorn deployments.
-    `KVProfileStore` (cloudflare/kv_store.py) implements the same interface
-    on top of Cloudflare KV for the Workers deployment, where there is no
-    persistent local filesystem. `ImplicitProfiler` only ever calls these
-    two methods, so any other backend (Redis, a real database, ...) is a
-    drop-in as long as it implements them the same way.
+    """Storage backend interface. All three methods are `async def` even
+    though `FileProfileStore` (below) has no real I/O to await - this is
+    forced by `KVProfileStore` (cf/kv_store.py): Cloudflare Workers KV
+    operations are Promise-based and MUST be awaited (confirmed against
+    Cloudflare's own docs - `put`/`get`/`delete` all return a Promise), so
+    a single async interface is used everywhere rather than having
+    `ImplicitProfiler` special-case one backend. `FileProfileStore` is the
+    default, local-disk implementation used by `python app.py` / gunicorn
+    deployments. Any other backend (Redis, a real database, ...) is a
+    drop-in as long as it implements these three as coroutines.
     """
 
-    def load_raw(self, user_id: str) -> dict | None:
+    async def load_raw(self, user_id: str) -> dict | None:
         raise NotImplementedError
 
-    def save_raw(self, user_id: str, data: dict) -> None:
+    async def save_raw(self, user_id: str, data: dict) -> None:
         raise NotImplementedError
 
-    def delete(self, user_id: str) -> None:
+    async def delete(self, user_id: str) -> None:
         raise NotImplementedError
 
 
 class FileProfileStore(ProfileStore):
     """Default backend: one JSON file per user under `storage_dir`. Requires
     a writable, persistent local filesystem - fine for `python app.py` or a
-    single-process gunicorn deployment, not usable on Cloudflare Workers."""
+    single-process gunicorn deployment, not usable on Cloudflare Workers.
+
+    The file I/O here is plain blocking calls, not real async I/O - these
+    methods are only `async def` to satisfy the shared `ProfileStore`
+    interface (see its docstring). That's harmless for this prototype's
+    traffic level; it would be worth using `aiofiles` or a thread executor
+    if this backend ever needed to handle real concurrent load."""
 
     def __init__(self, storage_dir: str | Path = "profiles"):
         self.storage_dir = Path(storage_dir)
@@ -157,16 +166,16 @@ class FileProfileStore(ProfileStore):
     def _path(self, user_id: str) -> Path:
         return self.storage_dir / f"{user_id}.json"
 
-    def load_raw(self, user_id: str) -> dict | None:
+    async def load_raw(self, user_id: str) -> dict | None:
         path = self._path(user_id)
         if path.exists():
             return json.loads(path.read_text())
         return None
 
-    def save_raw(self, user_id: str, data: dict) -> None:
+    async def save_raw(self, user_id: str, data: dict) -> None:
         self._path(user_id).write_text(json.dumps(data, indent=2))
 
-    def delete(self, user_id: str) -> None:
+    async def delete(self, user_id: str) -> None:
         path = self._path(user_id)
         if path.exists():
             path.unlink()
@@ -194,17 +203,17 @@ class ImplicitProfiler:
             return self.store._path(user_id)
         raise AttributeError("_path() is only available with FileProfileStore")
 
-    def load(self, user_id: str) -> ImplicitProfile:
-        data = self.store.load_raw(user_id)
+    async def load(self, user_id: str) -> ImplicitProfile:
+        data = await self.store.load_raw(user_id)
         if data:
             return ImplicitProfile(**data)
         return ImplicitProfile(user_id=user_id)
 
-    def save(self, profile: ImplicitProfile) -> None:
-        self.store.save_raw(profile.user_id, profile.to_dict())
+    async def save(self, profile: ImplicitProfile) -> None:
+        await self.store.save_raw(profile.user_id, profile.to_dict())
 
-    def delete(self, user_id: str) -> None:
-        self.store.delete(user_id)
+    async def delete(self, user_id: str) -> None:
+        await self.store.delete(user_id)
 
     # ------------------------------------------------------------------ #
     # feature extraction
@@ -257,8 +266,8 @@ class ImplicitProfiler:
     # ------------------------------------------------------------------ #
     # public API
     # ------------------------------------------------------------------ #
-    def update(self, user_id: str, message: str) -> ImplicitProfile:
-        profile = self.load(user_id)
+    async def update(self, user_id: str, message: str) -> ImplicitProfile:
+        profile = await self.load(user_id)
         w = _confidence_weight(profile.turn_count)
 
         sentiment = self._sentiment_score(message)
@@ -283,5 +292,5 @@ class ImplicitProfiler:
         profile.turn_count += 1
         profile.tone_label = self._tone_label(profile)
 
-        self.save(profile)
+        await self.save(profile)
         return profile

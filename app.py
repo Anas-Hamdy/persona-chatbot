@@ -24,11 +24,26 @@ from flask import Flask, jsonify, render_template, request, session
 
 from chatbot_engine import ChatEngine
 from profiler import ImplicitProfiler
+from cf.kv_store import KVProfileStore  # safe to import unconditionally - no Workers-only deps at import time
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("persona_chatbot")
 
 app = Flask(__name__)
+
+# Cloudflare Workers (Pyodide) likely do NOT populate os.environ from
+# wrangler.jsonc's `vars`/`secrets` - those are only confirmed to be
+# exposed as attributes on the per-request `env` object (self.env in
+# src/worker.py / WorkerEntrypoint.fetch), not as process environment
+# variables. Worse, on Workers this module only runs once at cold start,
+# before any request (and therefore any `env`) exists at all - so no
+# amount of os.getenv() here can see wrangler.jsonc's values. `_on_workers`
+# is used below to avoid hard-failing at import time for a condition
+# (missing SECRET_KEY) we cannot actually check yet in that environment;
+# `_apply_cloudflare_env_overrides()` (registered as a before_request hook)
+# is what actually re-reads config from `env` once a real request - and
+# therefore a real `env` - is available.
+_on_workers = "pyodide" in __import__("sys").modules or __import__("sys").platform == "emscripten"
 
 # SECRET_KEY must come from the environment in any deployment with more than
 # one worker process or that needs sessions to survive a restart - a key
@@ -37,15 +52,16 @@ app = Flask(__name__)
 # back to a random key is still fine for a single-process local demo.
 _secret_key = os.getenv("SECRET_KEY")
 if not _secret_key:
-    if os.getenv("FLASK_ENV") == "production":
+    if os.getenv("FLASK_ENV") == "production" and not _on_workers:
         raise RuntimeError(
             "SECRET_KEY environment variable is required when FLASK_ENV=production."
         )
-    logger.warning(
-        "SECRET_KEY not set - generating a temporary one for this process. "
-        "Sessions will be invalidated on restart and will NOT be shared across "
-        "multiple worker processes. Set SECRET_KEY before deploying."
-    )
+    if not _on_workers:
+        logger.warning(
+            "SECRET_KEY not set - generating a temporary one for this process. "
+            "Sessions will be invalidated on restart and will NOT be shared across "
+            "multiple worker processes. Set SECRET_KEY before deploying."
+        )
     _secret_key = secrets.token_hex(16)
 app.secret_key = _secret_key
 
@@ -67,7 +83,6 @@ app.config["SESSION_COOKIE_SECURE"] = os.getenv("FLASK_ENV") == "production"
 #                       docs/CLOUDFLARE_DEPLOYMENT.md - Workers has no
 #                       persistent local filesystem, so "file" cannot work there).
 if os.getenv("STORAGE_BACKEND", "file") == "kv":
-    from cf.kv_store import KVProfileStore
     profiler = ImplicitProfiler(store=KVProfileStore(os.getenv("KV_BINDING_NAME", "PROFILES_KV")))
 else:
     profiler = ImplicitProfiler(storage_dir=os.getenv("PROFILE_STORAGE_DIR", "profiles"))
@@ -84,6 +99,53 @@ _HISTORY: dict[str, list[dict]] = {}
 _HISTORY_LAST_SEEN: dict[str, float] = {}
 _MAX_HISTORY_TURNS = 40   # 20 user+assistant pairs; bounds per-user memory growth
 _MAX_TRACKED_USERS = 5000  # simple cap so an idle demo server can't grow forever
+
+
+_cf_env_checked = False
+
+
+@app.before_request
+def _apply_cloudflare_env_overrides():
+    """On Cloudflare Workers, wrangler.jsonc's `vars`/`secrets` and bindings
+    are only reachable through the per-request `env` object - never through
+    os.getenv() at import time (see the comment above `_on_workers`). This
+    runs once, on the first real request, and re-applies SECRET_KEY /
+    STORAGE_BACKEND from `env` if one is found. It is a no-op (and cheap -
+    one dict lookup) on every other deployment, where `environ["env"]` is
+    simply never present.
+
+    The `request.environ["env"]` lookup itself is the one part of this
+    integration that could not be confirmed against Cloudflare's current
+    docs (see cf/kv_store.py's module docstring and
+    docs/CLOUDFLARE_DEPLOYMENT.md) - if this never fires on a real deploy,
+    that lookup key is the first thing to check.
+    """
+    global _cf_env_checked
+    if _cf_env_checked:
+        return
+    _cf_env_checked = True
+
+    env = request.environ.get("env")
+    if env is None:
+        return
+
+    try:
+        env_secret_key = getattr(env, "SECRET_KEY", None)
+        if env_secret_key:
+            app.secret_key = env_secret_key
+        elif os.getenv("FLASK_ENV") == "production" or getattr(env, "FLASK_ENV", None) == "production":
+            logger.error(
+                "Running on Cloudflare Workers with no SECRET_KEY found on `env` - "
+                "sessions will use a random per-isolate key. Run: "
+                "wrangler secret put SECRET_KEY"
+            )
+
+        storage_backend = getattr(env, "STORAGE_BACKEND", None)
+        if storage_backend == "kv" and not isinstance(profiler.store, KVProfileStore):
+            profiler.store = KVProfileStore(getattr(env, "KV_BINDING_NAME", "PROFILES_KV"))
+            logger.info("Switched profile storage to Cloudflare KV based on env.STORAGE_BACKEND.")
+    except Exception:
+        logger.exception("Failed to apply Cloudflare env overrides; continuing with import-time config.")
 
 
 def _get_user_id() -> str:
@@ -120,7 +182,12 @@ def healthz():
 
 
 @app.route("/api/chat", methods=["POST"])
-def chat():
+async def chat():
+    # async because ProfileStore.load/save must be awaited for the
+    # Cloudflare KV backend (KV get/put/delete return Promises - see
+    # profiler.py's ProfileStore docstring and cf/kv_store.py). Flask 3
+    # runs async views via asgiref under gunicorn/dev server too, so this
+    # works unchanged for the local/gunicorn (file-backed) deployment.
     payload = request.get_json(silent=True)
     if payload is None:
         return jsonify({"error": "request body must be valid JSON"}), 400
@@ -135,7 +202,7 @@ def chat():
     history = _touch_history(user_id)
 
     try:
-        profile = profiler.update(user_id, message)
+        profile = await profiler.update(user_id, message)
         reply = engine.reply(message, profile, history)
     except Exception:
         logger.exception("Unhandled error while generating a reply for user %s", user_id)
@@ -154,11 +221,11 @@ def chat():
 
 
 @app.route("/api/reset", methods=["POST"])
-def reset():
+async def reset():
     user_id = _get_user_id()
     _HISTORY.pop(user_id, None)
     _HISTORY_LAST_SEEN.pop(user_id, None)
-    profiler.delete(user_id)
+    await profiler.delete(user_id)
     return jsonify({"status": "ok"})
 
 

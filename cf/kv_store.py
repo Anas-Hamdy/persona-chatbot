@@ -70,16 +70,21 @@ class KVProfileStore(ProfileStore):
             )
         return kv
 
-    def load_raw(self, user_id: str) -> dict | None:
+    async def load_raw(self, user_id: str) -> dict | None:
         import json
-        raw = self._kv().get(f"profile:{user_id}")
+        # Cloudflare KV get/put/delete all return a Promise and MUST be
+        # awaited (confirmed against Cloudflare's KV and Python Workers
+        # docs) - this was a real bug in an earlier version of this file:
+        # calling these without `await` would return an un-awaited
+        # Promise/coroutine object instead of the actual value.
+        raw = await self._kv().get(f"profile:{user_id}")
         if raw is None:
             return None
         return json.loads(raw)
 
-    def save_raw(self, user_id: str, data: dict) -> None:
+    async def save_raw(self, user_id: str, data: dict) -> None:
         import json
-        self._kv().put(f"profile:{user_id}", json.dumps(data))
+        await self._kv().put(f"profile:{user_id}", json.dumps(data))
 
-    def delete(self, user_id: str) -> None:
-        self._kv().delete(f"profile:{user_id}")
+    async def delete(self, user_id: str) -> None:
+        await self._kv().delete(f"profile:{user_id}")

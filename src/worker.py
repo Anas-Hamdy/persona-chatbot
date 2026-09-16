@@ -23,8 +23,30 @@ from pathlib import Path
 # cf/) live at the repository root, one level up from src/.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from workers import wsgi  # provided by the Workers Python runtime
+from workers import WorkerEntrypoint, wsgi  # provided by the Workers Python runtime
 
+import cf.kv_store as kv_store
 from app import app as flask_app  # noqa: E402  (import after sys.path fix)
 
-Default = wsgi.entrypoint(flask_app)
+_wsgi_handler = wsgi.entrypoint(flask_app)
+
+
+class Default(WorkerEntrypoint):
+    """Manual entrypoint (instead of `Default = wsgi.entrypoint(flask_app)`
+    directly) so `cf.kv_store.bind(self.env)` actually runs before Flask
+    handles the request - the earlier version of this file assigned
+    `wsgi.entrypoint(flask_app)` straight to `Default` and never called
+    `bind()` at all, which was a real bug: KVProfileStore's `environ["env"]`
+    lookup was the only path that could ever supply an `env`, with no
+    fallback actually wired in.
+
+    This still assumes `wsgi.entrypoint(...)`'s returned object exposes an
+    async `fetch(self, request)` compatible with `WorkerEntrypoint` - that
+    composition is not documented and could not be confirmed without a live
+    deploy. If `pywrangler dev` errors on this file, the safe fallback is
+    reverting to `Default = wsgi.entrypoint(flask_app)` and relying solely
+    on the `environ["env"]` path in cf/kv_store.py."""
+
+    async def fetch(self, request):
+        kv_store.bind(self.env)
+        return await _wsgi_handler(self).fetch(request)

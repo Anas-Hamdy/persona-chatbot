@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 # Workers), and no gunicorn (Workers is not a WSGI-server-managed process).
 dependencies = [
     "flask==3.0.3",
+    "asgiref==3.8.1",
 ]
 
 [dependency-groups]

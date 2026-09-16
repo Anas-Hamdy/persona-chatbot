@@ -6,13 +6,24 @@
 	"compatibility_flags": [
 		"python_workers"
 	],
-	// Serves templates/ and static/ (the chat UI) alongside the Flask API.
-	// run_worker_first ensures /api/* and /healthz hit the Python Worker
-	// instead of being served (or 404ing) as static files.
+	// Serves templates/ (via Flask) and static/ (the chat UI's JS/CSS)
+	// alongside the Flask API. run_worker_first="true" was wrong - it sent
+	// EVERY request, including /static/*, to the Python Worker first, but
+	// Flask has no real filesystem access to those files inside Pyodide
+	// (they're uploaded through this separate assets/CDN mechanism, not
+	// as files Flask's static_folder can open()) - confirmed by a live
+	// deploy: /static/style.css and /static/app.js both 404'd, and the
+	// dev console showed "Failed to load resource: 404" for both, which
+	// also silently broke the chat UI's JS (so clicking Send did nothing -
+	// no POST to /api/chat ever fired). Scoping run_worker_first to just
+	// the dynamic routes lets everything else (i.e. /static/*) serve
+	// directly from Cloudflare's asset CDN instead, bypassing the Worker
+	// entirely for those, per
+	// developers.cloudflare.com/workers/static-assets/binding/.
 	"assets": {
 		"directory": "./static",
 		"binding": "ASSETS",
-		"run_worker_first": true
+		"run_worker_first": ["/", "/api/*", "/healthz"]
 	},
 	// Non-secret configuration. STORAGE_BACKEND=kv switches profiler.py to
 	// cf/kv_store.py instead of local-disk JSON files (see profiler.py).
